@@ -1,0 +1,9 @@
+[package]
+name    = "nativis-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+glam      = { workspace = true }
+thiserror = { workspace = true }
+tracing   = { workspace = true }

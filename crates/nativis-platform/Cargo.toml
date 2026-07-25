@@ -1,0 +1,23 @@
+[package]
+name    = "nativis-platform"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nativis-core  = { workspace = true }
+nativis-rhi   = { workspace = true }
+nativis-event = { workspace = true }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }
+winit         = { workspace = true }
+raw-window-handle = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+smithay-client-toolkit = { workspace = true }
+wayland-client         = { workspace = true }
+wayland-protocols-wlr  = { workspace = true }
+
+[features]
+default        = ["platform-wayland"]
+platform-wayland = []
+platform-x11   = []

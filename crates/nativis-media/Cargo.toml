@@ -1,0 +1,21 @@
+[package]
+name    = "nativis-media"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nativis-core  = { workspace = true }
+nativis-rhi   = { workspace = true }
+nativis-asset = { workspace = true }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }
+image         = { workspace = true }
+crossbeam-channel = { workspace = true }
+
+[features]
+default = []
+video = ["dep:ffmpeg-next"]
+
+[dependencies.ffmpeg-next]
+version  = "7"
+optional = true

@@ -1,0 +1,14 @@
+[package]
+name    = "nativis-scene"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nativis-core         = { workspace = true }
+nativis-rhi          = { workspace = true }
+nativis-ecs          = { workspace = true }
+nativis-timeline     = { workspace = true }
+nativis-render-graph = { workspace = true }
+wgpu                 = { workspace = true }
+thiserror            = { workspace = true }
+tracing              = { workspace = true }

@@ -1,0 +1,8 @@
+[package]
+name    = "nativis-ecs"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nativis-core = { workspace = true }
+thiserror    = { workspace = true }
