@@ -18,7 +18,7 @@ pub trait IWallpaperBackend: Send + Sync {
 
     /// Called after the window is fully created and configured.
     /// Attaches the window to the desktop background layer.
-    fn attach(&mut self) -> Result<(), WallpaperBackendError>;
+    fn attach(&mut self, window: &winit::window::Window) -> Result<(), WallpaperBackendError>;
 
     /// Detach from the desktop layer and restore normal window behaviour.
     fn detach(&mut self) -> Result<(), WallpaperBackendError>;

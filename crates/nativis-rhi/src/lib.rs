@@ -1,14 +1,15 @@
 //! nativis-rhi — Rendering Hardware Interface.
 //!
-//! The RHI is the single seam between engine rendering logic and the concrete
-//! GPU API.  All higher-level crates (render-graph, scene, media) operate
-//! entirely on opaque handles and the `IRhiBackend` trait.  Only this crate
-//! and its backends ever touch wgpu / Vulkan / Metal / D3D12 directly.
+//! Provides opaque GPU handles (`TextureHandle`, `BufferHandle`) and the
+//! `RhiContext` passed to media backends at `open()` time. Engine code above
+//! this layer never touches wgpu / Vulkan / Metal / D3D12 directly.
 
 pub mod backend;
+pub mod context;
 pub mod types;
 pub mod wgpu_backend;
 
 pub use backend::IRhiBackend;
+pub use context::RhiContext;
 pub use types::*;
 pub use wgpu_backend::WgpuBackend;

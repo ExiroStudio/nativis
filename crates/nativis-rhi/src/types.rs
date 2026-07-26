@@ -1,19 +1,58 @@
-use nativis_core::Handle;
+//! RHI type definitions: opaque handles, formats, descriptors, errors.
+//!
+//! No wgpu types are re-exported. Engine code above this crate uses only
+//! the types defined here.
 
-// ── Marker types for type-safe handles ───────────────────────────────────────
-pub struct GpuTexture;
-pub struct GpuBuffer;
-pub struct GpuShader;
-pub struct GpuPipeline;
-pub struct GpuSwapchain;
+use std::sync::Arc;
 
-pub type TextureHandle   = Handle<GpuTexture>;
-pub type BufferHandle    = Handle<GpuBuffer>;
-pub type ShaderHandle    = Handle<GpuShader>;
-pub type PipelineHandle  = Handle<GpuPipeline>;
-pub type SwapchainHandle = Handle<GpuSwapchain>;
+// ── TextureHandle ─────────────────────────────────────────────────────────────
+
+/// Opaque handle to a GPU-resident texture.
+///
+/// Lifetime managed by Arc. Clone is cheap. Dropping the last clone frees
+/// the GPU texture and view.
+#[derive(Clone)]
+pub struct TextureHandle {
+    view:    Arc<wgpu::TextureView>,
+    texture: Arc<wgpu::Texture>,
+    width:   u32,
+    height:  u32,
+}
+
+impl TextureHandle {
+    pub(crate) fn from_arc_view(
+        view: Arc<wgpu::TextureView>,
+        texture: Arc<wgpu::Texture>,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        Self { view, texture, width, height }
+    }
+
+    pub fn width(&self) -> u32 { self.width }
+    pub fn height(&self) -> u32 { self.height }
+
+    /// Access the raw wgpu TextureView and Texture for internal RHI use only.
+    /// Returns `None` if the handle is invalid (should not happen in practice).
+    pub(crate) fn raw_refs(&self) -> Option<(&wgpu::TextureView, &wgpu::Texture)> {
+        Some((&self.view, &self.texture))
+    }
+
+    /// Expose the inner `wgpu::TextureView` for the render engine only.
+    /// This must not be called from media plugin code.
+    pub fn wgpu_view(&self) -> &wgpu::TextureView {
+        &self.view
+    }
+}
+
+impl std::fmt::Debug for TextureHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TextureHandle({}x{})", self.width, self.height)
+    }
+}
 
 // ── Pixel / texture formats ───────────────────────────────────────────────────
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TextureFormat {
     Rgba8Unorm,
@@ -21,134 +60,91 @@ pub enum TextureFormat {
     Rgba16Float,
     R8Unorm,
     Rg8Unorm,
-    /// NV12: Y plane (R8) + interleaved UV plane (RG8), hardware video surfaces.
-    Nv12,
     Bgra8Unorm,
     Bgra8UnormSrgb,
+    /// NV12: Y plane (R8) + interleaved UV plane (RG8), for hardware video.
+    Nv12,
 }
 
 impl TextureFormat {
-    /// Returns the corresponding `wgpu::TextureFormat` for formats supported
-    /// by wgpu natively. `Nv12` must be handled via YUV conversion pass.
     pub fn to_wgpu(self) -> Option<wgpu::TextureFormat> {
         match self {
-            Self::Rgba8Unorm       => Some(wgpu::TextureFormat::Rgba8Unorm),
-            Self::Rgba8UnormSrgb   => Some(wgpu::TextureFormat::Rgba8UnormSrgb),
-            Self::Rgba16Float      => Some(wgpu::TextureFormat::Rgba16Float),
-            Self::R8Unorm          => Some(wgpu::TextureFormat::R8Unorm),
-            Self::Rg8Unorm         => Some(wgpu::TextureFormat::Rg8Unorm),
-            Self::Bgra8Unorm       => Some(wgpu::TextureFormat::Bgra8Unorm),
-            Self::Bgra8UnormSrgb   => Some(wgpu::TextureFormat::Bgra8UnormSrgb),
-            Self::Nv12             => None,
+            Self::Rgba8Unorm     => Some(wgpu::TextureFormat::Rgba8Unorm),
+            Self::Rgba8UnormSrgb => Some(wgpu::TextureFormat::Rgba8UnormSrgb),
+            Self::Rgba16Float    => Some(wgpu::TextureFormat::Rgba16Float),
+            Self::R8Unorm        => Some(wgpu::TextureFormat::R8Unorm),
+            Self::Rg8Unorm       => Some(wgpu::TextureFormat::Rg8Unorm),
+            Self::Bgra8Unorm     => Some(wgpu::TextureFormat::Bgra8Unorm),
+            Self::Bgra8UnormSrgb => Some(wgpu::TextureFormat::Bgra8UnormSrgb),
+            Self::Nv12           => None,
+        }
+    }
+
+    pub fn bytes_per_pixel(self) -> u32 {
+        match self {
+            Self::R8Unorm => 1,
+            Self::Rg8Unorm => 2,
+            Self::Rgba8Unorm | Self::Rgba8UnormSrgb
+            | Self::Bgra8Unorm | Self::Bgra8UnormSrgb => 4,
+            Self::Rgba16Float => 8,
+            Self::Nv12 => 1, // Y plane only
         }
     }
 }
 
-// ── Texture descriptor ────────────────────────────────────────────────────────
+// ── TextureUsage ──────────────────────────────────────────────────────────────
+
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct TextureUsage: u32 {
-        const COPY_SRC        = 0b0000_0001;
-        const COPY_DST        = 0b0000_0010;
-        const SAMPLED         = 0b0000_0100;
-        const RENDER_TARGET   = 0b0000_1000;
-        const STORAGE         = 0b0001_0000;
+        const COPY_SRC      = 0b0000_0001;
+        const COPY_DST      = 0b0000_0010;
+        const SAMPLED       = 0b0000_0100;
+        const RENDER_TARGET = 0b0000_1000;
+        const STORAGE       = 0b0001_0000;
     }
 }
 
+// ── Descriptors ───────────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone)]
 pub struct TextureDescriptor {
-    pub label:   Option<String>,
-    pub width:   u32,
-    pub height:  u32,
-    pub format:  TextureFormat,
-    pub usage:   TextureUsage,
+    pub label:      Option<String>,
+    pub width:      u32,
+    pub height:     u32,
+    pub format:     TextureFormat,
+    pub usage:      TextureUsage,
     pub mip_levels: u32,
 }
 
 impl TextureDescriptor {
+    /// Convenience constructor for a 2D sampled texture (media frame upload).
+    pub fn media_frame(width: u32, height: u32, format: TextureFormat) -> Self {
+        Self {
+            label: Some("media_frame".into()),
+            width,
+            height,
+            format,
+            usage: TextureUsage::COPY_DST | TextureUsage::SAMPLED,
+            mip_levels: 1,
+        }
+    }
+
+    /// Convenience constructor for a render target (offscreen post-processing).
     pub fn render_target(width: u32, height: u32, format: TextureFormat) -> Self {
         Self {
-            label:      None,
-            width, height, format,
-            usage:      TextureUsage::SAMPLED | TextureUsage::RENDER_TARGET | TextureUsage::COPY_SRC,
-            mip_levels: 1,
-        }
-    }
-
-    pub fn sampled_2d(width: u32, height: u32, format: TextureFormat) -> Self {
-        Self {
-            label:      None,
-            width, height, format,
-            usage:      TextureUsage::COPY_DST | TextureUsage::SAMPLED,
+            label: Some("render_target".into()),
+            width,
+            height,
+            format,
+            usage: TextureUsage::SAMPLED | TextureUsage::RENDER_TARGET | TextureUsage::COPY_SRC,
             mip_levels: 1,
         }
     }
 }
 
-// ── Buffer descriptor ─────────────────────────────────────────────────────────
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BufferUsage { Vertex, Index, Uniform, Storage, Staging }
+// ── Errors ────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
-pub struct BufferDescriptor {
-    pub label: Option<String>,
-    pub size:  u64,
-    pub usage: BufferUsage,
-}
-
-// ── Shader descriptor ─────────────────────────────────────────────────────────
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShaderStage { Vertex, Fragment, Compute }
-
-#[derive(Debug, Clone)]
-pub struct ShaderDescriptor {
-    pub label:  Option<String>,
-    pub stage:  ShaderStage,
-    /// WGSL source code (wgpu backend) or SPIR-V (future Vulkan backend).
-    pub source: ShaderSource,
-}
-
-#[derive(Debug, Clone)]
-pub enum ShaderSource {
-    Wgsl(String),
-    SpirV(Vec<u32>),
-}
-
-// ── Pipeline descriptor ───────────────────────────────────────────────────────
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlendMode {
-    Opaque,
-    AlphaBlend,
-    Additive,
-    Multiply,
-    Screen,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CullMode { None, Front, Back }
-
-#[derive(Debug, Clone)]
-pub struct PipelineDescriptor {
-    pub label:        Option<String>,
-    pub vertex_shader:   ShaderHandle,
-    pub fragment_shader: ShaderHandle,
-    pub blend_mode:   BlendMode,
-    pub cull_mode:    CullMode,
-    pub depth_write:  bool,
-    /// Output texture format (must match the render target).
-    pub output_format: TextureFormat,
-}
-
-// ── Upload helper ─────────────────────────────────────────────────────────────
-/// Raw pixel data to be uploaded to a GPU texture.
-pub struct TextureUpload<'a> {
-    pub handle: TextureHandle,
-    pub data:   &'a [u8],
-    pub bytes_per_row: u32,
-}
-
-// ── Error ─────────────────────────────────────────────────────────────────────
 #[derive(Debug, thiserror::Error)]
 pub enum RhiError {
     #[error("No suitable GPU adapter found")]
@@ -157,16 +153,25 @@ pub enum RhiError {
     DeviceCreation(String),
     #[error("Surface creation failed: {0}")]
     SurfaceCreation(String),
-    #[error("Surface configuration failed: no supported format")]
+    #[error("Surface format not supported")]
     SurfaceFormat,
-    #[error("Invalid handle")]
+    #[error("Invalid texture handle")]
     InvalidHandle,
-    #[error("GPU texture upload failed: {0}")]
+    #[error("GPU upload failed: {0}")]
     UploadFailed(String),
     #[error("Backend error: {0}")]
     Backend(String),
 }
 
-// ── Backend type ──────────────────────────────────────────────────────────────
+// ── Backend type tag ──────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendType { Vulkan, Metal, DirectX12, OpenGL, WebGpu }
+
+// ── Texture upload helper (for IRhiBackend::upload_texture_data) ─────────────
+
+pub struct TextureUpload<'a> {
+    pub handle:        &'a TextureHandle,
+    pub data:          &'a [u8],
+    pub bytes_per_row: u32,
+}

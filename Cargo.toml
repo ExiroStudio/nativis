@@ -2,18 +2,13 @@
 resolver = "2"
 members = [
     "crates/nativis-core",
-    "crates/nativis-event",
-    "crates/nativis-rhi",
-    "crates/nativis-render-graph",
     "crates/nativis-asset",
-    "crates/nativis-media",
-    "crates/nativis-ecs",
-    "crates/nativis-scene",
-    "crates/nativis-timeline",
-    "crates/nativis-audio",
+    "crates/nativis-rhi",
+    "crates/nativis-render",
     "crates/nativis-platform",
     "crates/nativis-plugin",
-    "crates/nativis-engine",
+    "crates/nativis-runtime",
+    "plugins/image_backend",
 ]
 
 [workspace.package]
@@ -24,9 +19,6 @@ authors      = ["Nativis Contributors"]
 
 # ── Shared dependency versions ──────────────────────────────────────────────
 [workspace.dependencies]
-# Math
-glam = { version = "0.29", features = ["bytemuck"] }
-
 # Logging / tracing
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
@@ -49,13 +41,11 @@ raw-window-handle  = "0.6"
 # Image
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 
-# Wayland
+# Wayland / X11
 smithay-client-toolkit = "0.19"
 wayland-client         = "0.31"
 wayland-protocols-wlr  = { version = "0.3", features = ["client"] }
-
-# Audio
-cpal = "0.15"
+x11rb                  = "0.13"
 
 # Concurrency
 parking_lot        = "0.12"
@@ -65,20 +55,19 @@ crossbeam-channel  = "0.5"
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Utilities
+bitflags = "2"
+pollster = "0.3"
+
 # ── Internal crates ──────────────────────────────────────────────────────────
-nativis-core         = { path = "crates/nativis-core" }
-nativis-event        = { path = "crates/nativis-event" }
-nativis-rhi          = { path = "crates/nativis-rhi" }
-nativis-render-graph = { path = "crates/nativis-render-graph" }
-nativis-asset        = { path = "crates/nativis-asset" }
-nativis-media        = { path = "crates/nativis-media" }
-nativis-ecs          = { path = "crates/nativis-ecs" }
-nativis-scene        = { path = "crates/nativis-scene" }
-nativis-timeline     = { path = "crates/nativis-timeline" }
-nativis-audio        = { path = "crates/nativis-audio" }
-nativis-platform     = { path = "crates/nativis-platform" }
-nativis-plugin       = { path = "crates/nativis-plugin" }
-nativis-engine       = { path = "crates/nativis-engine" }
+nativis-core     = { path = "crates/nativis-core" }
+nativis-asset    = { path = "crates/nativis-asset" }
+nativis-rhi      = { path = "crates/nativis-rhi" }
+nativis-render   = { path = "crates/nativis-render" }
+nativis-platform = { path = "crates/nativis-platform" }
+nativis-plugin   = { path = "crates/nativis-plugin" }
+nativis-runtime      = { path = "crates/nativis-runtime" }
+nativis-plugin-image = { path = "plugins/image_backend" }
 
 # ── Binary ───────────────────────────────────────────────────────────────────
 [package]
@@ -87,7 +76,11 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-nativis-engine     = { workspace = true }
-tracing-subscriber = { workspace = true }
-tracing            = { workspace = true }
-anyhow             = { workspace = true }
+nativis-runtime      = { workspace = true }
+nativis-plugin       = { workspace = true }
+nativis-plugin-image = { workspace = true }
+tracing-subscriber   = { workspace = true }
+tracing              = { workspace = true }
+anyhow               = { workspace = true }
+
+

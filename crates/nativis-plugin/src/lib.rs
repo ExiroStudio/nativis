@@ -1,63 +1,77 @@
-//! nativis-plugin — Capability declaration and security permission system.
+//! nativis-plugin — Plugin registry and loader for media backends.
 //!
-//! Every plugin must declare its required capabilities in its `PluginManifest`.
-//! The `ICapabilitySecurityManager` decides whether to grant them at load time.
-//! In Phase 1 this ships as a fully-defined contract with a permissive stub
-//! implementation. Enforcement is added in Phase 2 (Wasm sandbox).
+//! Responsibility: Find the right `MediaBackend` for a given `AssetPath`.
+//!
+//! The runtime calls `registry.create_backend(&asset_path)` and receives
+//! a ready-to-open backend. It never names a backend type directly.
+//!
+//! # Plugin registration
+//!
+//! Static (built-in) backends call `registry.register(factory_fn)`.
+//! Dynamic (.so/.dll) backends will call the same function from their
+//! `nativis_plugin_init()` C entry point.
 
-use serde::{Deserialize, Serialize};
+use nativis_asset::AssetPath;
+use nativis_core::contract::MediaBackend;
+use tracing::{debug, warn};
 
-// ── Capability enum ───────────────────────────────────────────────────────────
+/// A factory function that constructs a `MediaBackend` instance.
+pub type BackendFactory = Box<dyn Fn() -> Box<dyn MediaBackend> + Send + Sync>;
 
-/// Every privileged operation a plugin may request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[non_exhaustive]
-pub enum Capability {
-    /// Capture system audio loopback for spectrum analysis.
-    AudioLoopbackCapture,
-    /// Open camera / webcam device streams.
-    CameraStreamAccess,
-    /// Open TCP/UDP network sockets.
-    NetworkSocketAccess,
-    /// Read arbitrary files from the host filesystem.
-    FileSystemRead,
-    /// Write arbitrary files to the host filesystem.
-    FileSystemWrite,
-    /// Dispatch GPU compute shaders.
-    GpuComputeDispatch,
-    /// Access the screen capture API.
-    ScreenCapture,
+/// A registered backend entry: factory + supported-uri predicate.
+struct BackendEntry {
+    name:    &'static str,
+    factory: BackendFactory,
 }
 
-// ── Manifest ─────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PluginManifest {
-    /// Unique reverse-DNS identifier, e.g. `"io.nativis.lottie-source"`.
-    pub id: String,
-    pub name: String,
-    pub version: String,
-    pub author: String,
-    pub requested_capabilities: Vec<Capability>,
+/// Central registry of all available media backends.
+///
+/// The runtime creates one `PluginRegistry` at startup, registers built-in
+/// backends, then calls `create_backend()` for each media open request.
+pub struct PluginRegistry {
+    entries: Vec<BackendEntry>,
 }
 
-// ── Security contract ─────────────────────────────────────────────────────────
+impl PluginRegistry {
+    pub fn new() -> Self {
+        Self { entries: Vec::new() }
+    }
 
-pub trait ICapabilitySecurityManager: Send + Sync {
-    /// Returns `true` if the plugin is allowed to use this capability.
-    fn request_permission(&self, plugin_id: &str, capability: Capability) -> bool;
-    fn revoke_permission(&self, plugin_id: &str, capability: Capability);
-    fn has_permission(&self, plugin_id: &str, capability: Capability) -> bool;
+    /// Register a media backend factory.
+    ///
+    /// The `factory` must return a fresh backend instance each call.
+    /// `name` is used only for logging.
+    pub fn register<F>(&mut self, name: &'static str, factory: F)
+    where
+        F: Fn() -> Box<dyn MediaBackend> + Send + Sync + 'static,
+    {
+        debug!("Plugin registered: {name}");
+        self.entries.push(BackendEntry { name, factory: Box::new(factory) });
+    }
+
+    /// Find and instantiate a backend that supports the given `AssetPath`.
+    ///
+    /// Returns `None` if no registered backend supports the URI.
+    /// The runtime never decides which backend to use — the registry does.
+    pub fn create_backend(&self, source: &AssetPath) -> Option<Box<dyn MediaBackend>> {
+        for entry in &self.entries {
+            // Probe using a temporary instance — supports() is cheap.
+            let probe = (entry.factory)();
+            if probe.supports(source) {
+                debug!("Backend '{}' selected for '{}'", entry.name, source.raw_uri());
+                // Return a fresh instance (not the probe).
+                return Some((entry.factory)());
+            }
+        }
+        warn!("No backend found for '{}'", source.raw_uri());
+        None
+    }
+
+    /// Number of registered backends.
+    pub fn len(&self) -> usize { self.entries.len() }
+    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
 }
 
-// ── Phase 1 permissive stub ───────────────────────────────────────────────────
-
-/// Development stub: grants every capability unconditionally.
-/// Replace with policy-enforced implementation before marketplace launch.
-pub struct PermissiveSecurityManager;
-
-impl ICapabilitySecurityManager for PermissiveSecurityManager {
-    fn request_permission(&self, _plugin_id: &str, _capability: Capability) -> bool { true }
-    fn revoke_permission(&self, _plugin_id: &str, _capability: Capability) {}
-    fn has_permission(&self, _plugin_id: &str, _capability: Capability) -> bool { true }
+impl Default for PluginRegistry {
+    fn default() -> Self { Self::new() }
 }

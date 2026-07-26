@@ -1,9 +1,0 @@
-[package]
-name    = "nativis-timeline"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-nativis-core = { workspace = true }
-nativis-ecs  = { workspace = true }
-thiserror    = { workspace = true }

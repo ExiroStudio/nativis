@@ -4,10 +4,5 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-nativis-core = { workspace = true }
-thiserror    = { workspace = true }
-tracing      = { workspace = true }
-tokio        = { workspace = true }
-serde        = { workspace = true }
-serde_json   = { workspace = true }
-parking_lot  = { workspace = true }
+thiserror = { workspace = true }
+tracing   = { workspace = true }

@@ -6,7 +6,6 @@ edition.workspace = true
 [dependencies]
 nativis-core  = { workspace = true }
 nativis-rhi   = { workspace = true }
-nativis-event = { workspace = true }
 thiserror     = { workspace = true }
 tracing       = { workspace = true }
 winit         = { workspace = true }
@@ -16,8 +15,9 @@ raw-window-handle = { workspace = true }
 smithay-client-toolkit = { workspace = true }
 wayland-client         = { workspace = true }
 wayland-protocols-wlr  = { workspace = true }
+x11rb                  = { workspace = true }
 
 [features]
-default        = ["platform-wayland"]
+default          = ["platform-wayland"]
 platform-wayland = []
-platform-x11   = []
+platform-x11     = []

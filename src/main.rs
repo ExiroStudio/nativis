@@ -1,66 +1,38 @@
-use nativis_engine::{Engine, EngineConfig};
+//! Nativis — lightweight native multimedia wallpaper runtime.
+//!
+//! Parses CLI args, builds the plugin registry, and hands off to the runtime.
+
 use tracing_subscriber::EnvFilter;
+use nativis_runtime::{Runtime, RuntimeConfig};
+use nativis_plugin::PluginRegistry;
 
 fn main() -> anyhow::Result<()> {
-    // ── Logging ───────────────────────────────────────────────────────────
+    // Initialize structured logging.
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,nativis=debug")),
-        )
-        .with_target(true)
+        .with_env_filter(EnvFilter::from_default_env()
+            .add_directive("nativis=debug".parse()?))
         .init();
 
-    // ── CLI args ──────────────────────────────────────────────────────────
-    let mut config = EngineConfig::default();
-
+    // Parse CLI: `nativis <media_uri> [output_index]`
     let args: Vec<String> = std::env::args().collect();
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--wallpaper" | "-w" => {
-                i += 1;
-                if let Some(path) = args.get(i) {
-                    config.wallpaper_path = path.clone();
-                }
-            }
-            "--output" | "-o" => {
-                i += 1;
-                if let Some(idx) = args.get(i) {
-                    config.output_index = idx.parse().unwrap_or(0);
-                }
-            }
-            "--fps" => {
-                i += 1;
-                if let Some(fps) = args.get(i) {
-                    config.target_fps = fps.parse().unwrap_or(60);
-                }
-            }
-            "--help" | "-h" => {
-                eprintln!(
-                    "Nativis Engine v{}\n\
-                     Usage: nativis [OPTIONS]\n\n\
-                     Options:\n\
-                       -w, --wallpaper <path>   Path to image or video wallpaper\n\
-                       -o, --output   <index>   Monitor output index (default: 0)\n\
-                       --fps          <fps>     Target frame rate (default: 60)\n\
-                       -h, --help               Print this help\n",
-                    env!("CARGO_PKG_VERSION")
-                );
-                return Ok(());
-            }
-            _ => {}
-        }
-        i += 1;
-    }
+    let media_uri = args.get(1).cloned().unwrap_or_default();
+    let output_index = args.get(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0usize);
 
-    tracing::info!(
-        wallpaper = %config.wallpaper_path,
-        output    = config.output_index,
-        fps       = config.target_fps,
-        "Starting Nativis Engine"
-    );
+    let config = RuntimeConfig {
+        media_uri,
+        output_index,
+        target_fps: 60,
+    };
 
-    // ── Boot ──────────────────────────────────────────────────────────────
-    Engine::new(config).run()
+    // Build plugin registry with built-in backends.
+    // New backends are added here without touching the runtime or renderer.
+    let mut registry = PluginRegistry::new();
+
+    // Built-in image backend (static plugin).
+    registry.register("image_backend", || Box::new(nativis_plugin_image::ImageBackend::new()));
+
+    // Hand off to the runtime conductor.
+    Runtime::new(config, registry).run()
 }

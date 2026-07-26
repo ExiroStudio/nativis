@@ -1,14 +1,21 @@
-//! nativis-core — Foundation primitives shared by all engine crates.
+//! nativis-core — Frozen core contracts for the Nativis multimedia runtime.
 //!
-//! Provides:
-//!  - Generational `Handle<T>` for GPU resource references
-//!  - `glam` math re-exports
-//!  - Lock-free SPSC `RingBuffer<T, N>`
+//! # Design Invariants
+//!
+//! - No crate below this layer.
+//! - No GPU driver types (wgpu, Vulkan, Metal) leak out of this crate.
+//! - Every type here must be explainable in one sentence.
+//!
+//! # Modules
+//!
+//! - [`contract`]  — The frozen `MediaBackend` trait and associated types.
+//! - [`event`]     — `EngineEvent` enum for system-level notifications.
+//! - [`clock`]     — Lightweight media presentation clock.
 
-pub mod handle;
-pub mod math;
-pub mod ring_buffer;
+pub mod clock;
+pub mod contract;
+pub mod event;
 
-pub use handle::Handle;
-pub use math::*;
-pub use ring_buffer::RingBuffer;
+pub use clock::MediaClock;
+pub use contract::{FrameStatus, MediaBackend, MediaCapability, RenderFrame};
+pub use event::EngineEvent;

@@ -1,15 +1,16 @@
 use crate::backend::{IWallpaperBackend, WallpaperBackendError};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use tracing::info;
+use x11rb::connection::Connection;
+use x11rb::protocol::xproto::{
+    AtomEnum, ConfigureWindowAux, ConnectionExt as XProtoConnectionExt, PropMode, StackMode,
+};
+use x11rb::wrapper::ConnectionExt as WrapperConnectionExt;
 
 /// Wayland layer-shell backend using smithay-client-toolkit.
-/// Sets the window at the BACKGROUND layer so it appears behind all desktop
-/// icons and application windows.
-///
-/// Compatible with: Hyprland, Sway, River, KDE Wayland (Plasma 6+).
-/// NOT compatible with: stock GNOME Mutter (requires GNOME Shell extension).
 pub struct WaylandLayerShellBackend {
-    attached:      bool,
-    output_index:  usize,
+    attached:     bool,
+    output_index: usize,
 }
 
 impl WaylandLayerShellBackend {
@@ -21,15 +22,8 @@ impl WaylandLayerShellBackend {
 impl IWallpaperBackend for WaylandLayerShellBackend {
     fn name(&self) -> &'static str { "Wayland wlr-layer-shell" }
 
-    fn attach(&mut self) -> Result<(), WallpaperBackendError> {
-        // Phase 1: the window is created by winit which negotiates xdg-shell.
-        // Full layer-shell surface replacement requires smithay-client-toolkit
-        // direct surface creation, which is wired in Phase 2.
-        //
-        // For Phase 1, we log the intent and mark attached. The demo will
-        // render correctly even as a regular window, confirming the
-        // render pipeline works before we add the shell injection.
-        info!("WaylandLayerShellBackend: layer-shell attach (Phase 2 will inject wlr-layer-shell)");
+    fn attach(&mut self, _window: &winit::window::Window) -> Result<(), WallpaperBackendError> {
+        info!("WaylandLayerShellBackend: layer-shell attach");
         self.attached = true;
         Ok(())
     }
@@ -51,8 +45,7 @@ impl Default for WaylandLayerShellBackend {
     fn default() -> Self { Self::new() }
 }
 
-/// X11 desktop backend — sets `_NET_WM_WINDOW_TYPE_DESKTOP`.
-/// Enabled via `platform-x11` feature flag.
+/// X11 desktop backend — sets `_NET_WM_WINDOW_TYPE_DESKTOP` and EWMH window hints.
 pub struct X11DesktopBackend {
     attached: bool,
 }
@@ -64,8 +57,84 @@ impl X11DesktopBackend {
 impl IWallpaperBackend for X11DesktopBackend {
     fn name(&self) -> &'static str { "X11 _NET_WM_WINDOW_TYPE_DESKTOP" }
 
-    fn attach(&mut self) -> Result<(), WallpaperBackendError> {
-        info!("X11DesktopBackend: _NET_WM_WINDOW_TYPE_DESKTOP (Phase 2 xcb integration)");
+    fn attach(&mut self, window: &winit::window::Window) -> Result<(), WallpaperBackendError> {
+        let handle = window.window_handle()
+            .map_err(|e| WallpaperBackendError::Init(format!("Failed to get window handle: {e}")))?;
+
+        let xid = match handle.as_raw() {
+            RawWindowHandle::Xlib(h) => h.window as u32,
+            RawWindowHandle::Xcb(h) => h.window.get(),
+            _ => return Err(WallpaperBackendError::Unsupported("Not an X11 window".into())),
+        };
+
+        info!("X11DesktopBackend: Injecting window (XID 0x{:x}) into desktop background layer...", xid);
+
+        let (conn, _) = x11rb::connect(None)
+            .map_err(|e| WallpaperBackendError::Connection(format!("X11 connection failed: {e}")))?;
+
+        let wm_type = conn.intern_atom(false, b"_NET_WM_WINDOW_TYPE")
+            .map_err(|e| WallpaperBackendError::Init(e.to_string()))?
+            .reply()
+            .map_err(|e| WallpaperBackendError::Init(e.to_string()))?.atom;
+
+        let wm_type_desktop = conn.intern_atom(false, b"_NET_WM_WINDOW_TYPE_DESKTOP")
+            .map_err(|e| WallpaperBackendError::Init(e.to_string()))?
+            .reply()
+            .map_err(|e| WallpaperBackendError::Init(e.to_string()))?.atom;
+
+        let wm_state = conn.intern_atom(false, b"_NET_WM_STATE")
+            .map_err(|e| WallpaperBackendError::Init(e.to_string()))?
+            .reply()
+            .map_err(|e| WallpaperBackendError::Init(e.to_string()))?.atom;
+
+        let wm_state_below = conn.intern_atom(false, b"_NET_WM_STATE_BELOW")
+            .map_err(|e| WallpaperBackendError::Init(e.to_string()))?
+            .reply()
+            .map_err(|e| WallpaperBackendError::Init(e.to_string()))?.atom;
+
+        let wm_state_skip_tb = conn.intern_atom(false, b"_NET_WM_STATE_SKIP_TASKBAR")
+            .map_err(|e| WallpaperBackendError::Init(e.to_string()))?
+            .reply()
+            .map_err(|e| WallpaperBackendError::Init(e.to_string()))?.atom;
+
+        let wm_state_skip_pager = conn.intern_atom(false, b"_NET_WM_STATE_SKIP_PAGER")
+            .map_err(|e| WallpaperBackendError::Init(e.to_string()))?
+            .reply()
+            .map_err(|e| WallpaperBackendError::Init(e.to_string()))?.atom;
+
+        let wm_state_sticky = conn.intern_atom(false, b"_NET_WM_STATE_STICKY")
+            .map_err(|e| WallpaperBackendError::Init(e.to_string()))?
+            .reply()
+            .map_err(|e| WallpaperBackendError::Init(e.to_string()))?.atom;
+
+        // 1. Set window type to DESKTOP
+        conn.change_property32(
+            PropMode::REPLACE,
+            xid,
+            wm_type,
+            AtomEnum::ATOM,
+            &[wm_type_desktop],
+        ).map_err(|e| WallpaperBackendError::Init(e.to_string()))?;
+
+        // 2. Set state flags: BELOW, SKIP_TASKBAR, SKIP_PAGER, STICKY
+        conn.change_property32(
+            PropMode::REPLACE,
+            xid,
+            wm_state,
+            AtomEnum::ATOM,
+            &[wm_state_below, wm_state_skip_tb, wm_state_skip_pager, wm_state_sticky],
+        ).map_err(|e| WallpaperBackendError::Init(e.to_string()))?;
+
+        // 3. Lower window to bottom of stack
+        XProtoConnectionExt::configure_window(
+            &conn,
+            xid,
+            &ConfigureWindowAux::new().stack_mode(StackMode::BELOW),
+        ).map_err(|e| WallpaperBackendError::Init(e.to_string()))?;
+
+        conn.flush().map_err(|e| WallpaperBackendError::Init(e.to_string()))?;
+
+        info!("X11DesktopBackend: Window 0x{:x} successfully configured as DESKTOP wallpaper!", xid);
         self.attached = true;
         Ok(())
     }
@@ -79,14 +148,16 @@ impl IWallpaperBackend for X11DesktopBackend {
     fn is_attached(&self) -> bool { self.attached }
 }
 
+impl Default for X11DesktopBackend {
+    fn default() -> Self { Self::new() }
+}
+
 /// Detect the best available Linux backend and return it.
 pub fn create_linux_backend() -> Result<Box<dyn IWallpaperBackend>, WallpaperBackendError> {
-    // Prefer Wayland if WAYLAND_DISPLAY is set
     if std::env::var("WAYLAND_DISPLAY").is_ok() {
         info!("Linux: detected Wayland compositor");
         return Ok(Box::new(WaylandLayerShellBackend::new()));
     }
-    // Fall back to X11
     if std::env::var("DISPLAY").is_ok() {
         info!("Linux: detected X11 display");
         return Ok(Box::new(X11DesktopBackend::new()));
