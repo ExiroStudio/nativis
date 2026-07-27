@@ -20,7 +20,6 @@ use nativis_core::{
     clock::MediaClock,
     contract::{FrameStatus, MediaBackend},
 };
-use nativis_platform::IWallpaperBackend;
 use nativis_plugin::PluginRegistry;
 use nativis_render::Renderer;
 use nativis_rhi::{IRhiBackend, WgpuBackend};
@@ -84,7 +83,7 @@ struct RuntimeApp {
     window:   Option<Arc<Window>>,
     rhi:      Option<WgpuBackend>,
     renderer: Renderer,
-    platform: Option<Box<dyn IWallpaperBackend>>,
+    platform: Option<Box<dyn nativis_platform::IWallpaperSession>>,
     backend:  Option<Box<dyn MediaBackend>>,
     clock:    MediaClock,
 
@@ -126,6 +125,20 @@ impl RuntimeApp {
             FrameStatus::Unchanged
         };
 
+        // ── Auto-Recovery ────────────────────────────────────────────────────
+        if let Some(platform) = self.platform.as_mut() {
+            if platform.health() == nativis_platform::BackendHealth::NeedsReattach {
+                warn!("Wallpaper backend requires re-attachment, attempting recovery...");
+                let _ = platform.detach();
+                if let Some(w) = self.window.as_ref() {
+                    match nativis_platform::attach_platform_backend(w.as_ref(), self.config.output_index) {
+                        Ok(p) => self.platform = Some(p),
+                        Err(e) => warn!("Auto-recovery failed: {e}"),
+                    }
+                }
+            }
+        }
+
         // ── Step 2: Draw (Composite + Post) ──────────────────────────────────
         self.renderer.draw(frame_status, rhi);
 
@@ -160,14 +173,8 @@ impl ApplicationHandler for RuntimeApp {
         self.renderer.init(&rhi);
 
         // Initialize wallpaper platform backend
-        match nativis_platform::create_platform_backend() {
-            Ok(mut p) => {
-                p.set_output(self.config.output_index);
-                if let Err(e) = p.attach(&window) {
-                    warn!("Wallpaper attach failed: {e}");
-                }
-                self.platform = Some(p);
-            }
+        match nativis_platform::attach_platform_backend(window.as_ref(), self.config.output_index) {
+            Ok(p) => self.platform = Some(p),
             Err(e) => warn!("Platform backend unavailable: {e}"),
         }
 

@@ -1,26 +1,34 @@
-//! nativis-platform — Desktop wallpaper backend and window management.
+//! Platform-specific native wallpaper attachment subsystem.
 //!
-//! `IWallpaperBackend` abstracts OS-specific desktop injection:
-//!   - Linux / Wayland: `wlr-layer-shell` at BACKGROUND layer
-//!   - Linux / X11:    `_NET_WM_WINDOW_TYPE_DESKTOP` (feature-gated)
-//!   - Windows:        WorkerW injection (Phase 4)
-//!   - macOS:          CGS desktop window level (Phase 4)
+//! Exposes a rule-driven capability resolution engine and wallpaper driver loader.
 
 pub mod backend;
+pub mod detector;
+pub mod metadata;
+pub mod plugins;
+pub mod registry;
+pub mod resolver;
+pub mod rules;
 
-pub use backend::{IWallpaperBackend, WallpaperBackendError};
+pub use backend::{
+    BackendHealth, IWallpaperDriver, IWallpaperSession, WallpaperBackendError, WallpaperContext,
+    WallpaperSurface,
+};
+pub use detector::{EnvironmentDetector, EnvironmentInfo};
+pub use metadata::{
+    AttachmentStrategy, BackendConfidence, DesktopEnvironment, DisplayServer, OperatingSystem,
+    WallpaperCapabilities, WallpaperPluginMetadata, WindowManager,
+};
+pub use registry::WallpaperDriverLoader;
+pub use resolver::ResolutionEngine;
+pub use rules::{AttachmentPlan, ResolutionRule};
 
-#[cfg(target_os = "linux")]
-pub mod linux;
-
-#[cfg(target_os = "linux")]
-pub use linux::create_linux_backend;
-
-/// Create the best available wallpaper backend for the current platform.
-pub fn create_platform_backend() -> Result<Box<dyn IWallpaperBackend>, WallpaperBackendError> {
-    #[cfg(target_os = "linux")]
-    return linux::create_linux_backend();
-
-    #[cfg(not(target_os = "linux"))]
-    Err(WallpaperBackendError::Unsupported("Platform not yet implemented".to_string()))
+/// Universal entrypoint: creates a default `WallpaperDriverLoader`, probes the host environment,
+/// resolves an `AttachmentPlan`, and attaches the matching driver session to the provided window.
+pub fn attach_platform_backend(
+    window: &winit::window::Window,
+    output_index: usize,
+) -> Result<Box<dyn IWallpaperSession>, WallpaperBackendError> {
+    let loader = WallpaperDriverLoader::with_default_drivers();
+    loader.select_and_attach(window, output_index)
 }
