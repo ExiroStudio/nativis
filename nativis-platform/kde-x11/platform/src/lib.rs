@@ -39,7 +39,7 @@ impl KdePlatform {
         
         let needs_install = !system_plugin_so.exists() || {
             let qmldir_path = system_qml_target.join("qmldir");
-            qmldir_path.exists() && std::fs::read_to_string(qmldir_path).unwrap_or_default().contains(".")
+            qmldir_path.exists() && std::fs::read_to_string(qmldir_path).unwrap_or_default().contains("plugin nativisplugin .")
         };
 
         if bundle_system_qml.exists() && needs_install {

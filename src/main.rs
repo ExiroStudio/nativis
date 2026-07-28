@@ -8,6 +8,16 @@ use nativis_platform_kde::KdePlatform;
 use nativis_core::platform::Platform;
 
 fn main() -> anyhow::Result<()> {
+    // 0. Single Instance Guard
+    let socket_path = "/tmp/nativis.sock";
+    use std::os::unix::net::{UnixStream, UnixListener};
+    if UnixStream::connect(socket_path).is_ok() {
+        eprintln!("Another instance of Nativis is already running. Please terminate it first.");
+        std::process::exit(1);
+    }
+    let _ = std::fs::remove_file(socket_path);
+    let _listener = UnixListener::bind(socket_path).expect("Failed to bind lock socket");
+
     tracing_subscriber::fmt::init();
 
     // 1. Simple CLI parsing (Nativis V1 just takes the URI as the first arg)
