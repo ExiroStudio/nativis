@@ -1,3 +1,5 @@
 /target
 *jpg
 scratch
+nativis
+platforms/kde-x11/plasma-plugin-qml/build
