@@ -1,0 +1,10 @@
+[package]
+name = "nativis-transport-shm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+libc = "0.2"
+nativis-protocol = { path = "../protocol" }

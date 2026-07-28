@@ -1,0 +1,12 @@
+[package]
+name = "nativis-v1-core"
+version = "1.0.0"
+edition = "2021"
+authors = ["Exiro"]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+nativis-protocol = { path = "../../../nativis-core/protocol" }
+nativis-transport-shm = { path = "../../../nativis-core/transport-shm" }

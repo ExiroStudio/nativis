@@ -1,0 +1,4 @@
+# Hashes of file build rules.
+aadff776dcc949b0fb66560929458fea CMakeFiles/nativisplugin_autogen
+aadff776dcc949b0fb66560929458fea CMakeFiles/nativisplugin_autogen_timestamp_deps
+f9ec8a31871715a8d09642ba96d96574 nativisplugin_autogen/timestamp

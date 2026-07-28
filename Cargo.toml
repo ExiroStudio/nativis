@@ -1,14 +1,22 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/nativis-core",
-    "crates/nativis-asset",
-    "crates/nativis-rhi",
-    "crates/nativis-render",
-    "crates/nativis-platform",
-    "crates/nativis-plugin",
-    "crates/nativis-runtime",
-    "plugins/image_backend",
+    # Engine Core
+    "nativis-core/core",
+    "nativis-core/asset",
+    "nativis-core/media",
+    "nativis-core/plugin",
+    "nativis-core/protocol",
+    "nativis-core/render",
+    "nativis-core/rhi",
+    "nativis-core/transport-shm",
+    "nativis-core/runtime",
+    "nativis-core/event",
+    "nativis-core/producer-image",
+
+    # Platform (KDE Plasma X11)
+    "nativis-platform/kde-x11/daemon",
+    "nativis-platform/kde-x11/plasma-plugin",
 ]
 
 [workspace.package]
@@ -27,29 +35,16 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 thiserror = "2"
 anyhow    = "1"
 
-# Async
-tokio = { version = "1", features = ["full"] }
-
-# GPU
+# GPU (Kept for Engine RHI)
 wgpu      = "22"
 bytemuck  = { version = "1", features = ["derive"] }
 
-# Windowing
+# Windowing (Kept for Engine RHI)
 winit              = "0.30"
 raw-window-handle  = "0.6"
 
-# Image
+# Image (Kept for Engine Media/Asset)
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
-
-# Wayland / X11
-smithay-client-toolkit = "0.19"
-wayland-client         = "0.31"
-wayland-protocols-wlr  = { version = "0.3", features = ["client"] }
-x11rb                  = "0.13"
-
-# Concurrency
-parking_lot        = "0.12"
-crossbeam-channel  = "0.5"
 
 # Serialization
 serde      = { version = "1", features = ["derive"] }
@@ -59,28 +54,27 @@ serde_json = "1"
 bitflags = "2"
 pollster = "0.3"
 
-# ── Internal crates ──────────────────────────────────────────────────────────
-nativis-core     = { path = "crates/nativis-core" }
-nativis-asset    = { path = "crates/nativis-asset" }
-nativis-rhi      = { path = "crates/nativis-rhi" }
-nativis-render   = { path = "crates/nativis-render" }
-nativis-platform = { path = "crates/nativis-platform" }
-nativis-plugin   = { path = "crates/nativis-plugin" }
-nativis-runtime      = { path = "crates/nativis-runtime" }
-nativis-plugin-image = { path = "plugins/image_backend" }
+# Concurrency
+parking_lot        = "0.12"
+crossbeam-channel  = "0.5"
 
-# ── Binary ───────────────────────────────────────────────────────────────────
+# ── Internal crates ──────────────────────────────────────────────────────────
+nativis-core     = { path = "nativis-core/core" }
+nativis-asset    = { path = "nativis-core/asset" }
+nativis-rhi      = { path = "nativis-core/rhi" }
+nativis-render   = { path = "nativis-core/render" }
+nativis-plugin   = { path = "nativis-core/plugin" }
+nativis-runtime  = { path = "nativis-core/runtime" }
+nativis-protocol = { path = "nativis-core/protocol" }
+nativis-transport-shm = { path = "nativis-core/transport-shm" }
+
+# ── Binary (nativis-cli placeholder) ─────────────────────────────────────────
 [package]
 name    = "nativis"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-nativis-runtime      = { workspace = true }
-nativis-plugin       = { workspace = true }
-nativis-plugin-image = { workspace = true }
 tracing-subscriber   = { workspace = true }
 tracing              = { workspace = true }
 anyhow               = { workspace = true }
-
-

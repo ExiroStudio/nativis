@@ -1,0 +1,15 @@
+[package]
+name    = "nativis-runtime"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nativis-core     = { workspace = true }
+nativis-asset    = { workspace = true }
+nativis-rhi      = { workspace = true }
+nativis-render   = { workspace = true }
+nativis-plugin   = { workspace = true }
+thiserror        = { workspace = true }
+tracing          = { workspace = true }
+anyhow           = { workspace = true }
+winit            = { workspace = true }
