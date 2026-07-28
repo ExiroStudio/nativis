@@ -24,54 +24,79 @@ impl KdePlatform {
     }
 
     fn check_and_install_bundle(&self) -> Result<bool> {
-        // Find the bundle in ./platforms/kde-x11
         let bundle_dir = Path::new("./platforms/kde-x11");
         if !bundle_dir.exists() {
             warn!("Bundle directory not found at {:?}", bundle_dir);
             return Ok(false);
         }
 
-        // For PoC V1, we assume the bundle is always newer/needed if it exists,
-        // or we just unconditionally copy it for simplicity in development.
-        // A real implementation would parse manifest.toml and compare versions.
-        info!("Installing KDE Plasma plugin from bundle...");
+        let mut installed_something = false;
 
-        if self.installed_plugin_dir.exists() {
-            fs::remove_dir_all(&self.installed_plugin_dir)?;
-        }
+        // 1. Install System QML Plugin (Requires sudo)
+        let system_qml_target = Path::new("/usr/lib/x86_64-linux-gnu/qt5/qml/org/nativis");
+        let system_plugin_so = system_qml_target.join("libnativisplugin.so");
+        let bundle_system_qml = bundle_dir.join("system-qml/org/nativis");
         
-        fs::create_dir_all(&self.installed_plugin_dir)?;
+        let needs_install = !system_plugin_so.exists() || {
+            let qmldir_path = system_qml_target.join("qmldir");
+            qmldir_path.exists() && std::fs::read_to_string(qmldir_path).unwrap_or_default().contains(".")
+        };
 
-        // Recursive copy
-        Self::copy_dir_recursive(&bundle_dir, &self.installed_plugin_dir)?;
+        if bundle_system_qml.exists() && needs_install {
+            println!("============================================================");
+            println!("Nativis needs to install the C++ QML plugin into the system");
+            println!("Qt directory to integrate with KDE Plasma Settings.");
+            println!("The following commands will be executed with sudo:");
+            
+            let parent_dir = "/usr/lib/x86_64-linux-gnu/qt5/qml/org";
+            println!("    sudo mkdir -p {}", parent_dir);
+            println!("    sudo cp -r {} {}", bundle_system_qml.display(), parent_dir);
+            println!("============================================================");
+            
+            let status1 = Command::new("sudo")
+                .args(&["mkdir", "-p", parent_dir])
+                .status()?;
+                
+            let status2 = Command::new("sudo")
+                .args(&["cp", "-r", bundle_system_qml.to_str().unwrap(), parent_dir])
+                .status()?;
 
-        info!("KDE Plasma plugin installed to {:?}", self.installed_plugin_dir);
+            if !status1.success() || !status2.success() {
+                warn!("Failed to install system QML plugin.");
+            } else {
+                info!("Successfully installed system QML plugin.");
+                installed_something = true;
+            }
+        }
 
-        // Update KDE System Configuration Cache (sycoca) so Plasma recognizes the new wallpaper plugin
-        let _ = Command::new("kbuildsycoca5")
+        // 2. Install KDE Plasma Wallpaper Package (User Space)
+        info!("Installing KDE Plasma wallpaper package using kpackagetool5...");
+        let _ = Command::new("kpackagetool5")
+            .args(&["-t", "Plasma/Wallpaper", "-r", "com.nativis.wallpaper"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
 
-        Ok(true) // indicates we installed something, so plasma might need reload
-    }
+        let status = Command::new("kpackagetool5")
+            .args(&["-t", "Plasma/Wallpaper", "-i", bundle_dir.to_str().unwrap()])
+            .status()?;
+            
+        if status.success() {
+            info!("KDE Plasma wallpaper package installed.");
+            installed_something = true;
+        } else {
+            warn!("Failed to install KDE Plasma wallpaper package.");
+        }
 
-    fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-        if !src.is_dir() {
-            return Err(anyhow!("Source is not a directory"));
+        // Update KDE System Configuration Cache (sycoca) so Plasma recognizes the new wallpaper plugin
+        if installed_something {
+            let _ = Command::new("kbuildsycoca5")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
         }
-        for entry in fs::read_dir(src)? {
-            let entry = entry?;
-            let ty = entry.file_type()?;
-            let new_dst = dst.join(entry.file_name());
-            if ty.is_dir() {
-                fs::create_dir_all(&new_dst)?;
-                Self::copy_dir_recursive(&entry.path(), &new_dst)?;
-            } else {
-                fs::copy(entry.path(), &new_dst)?;
-            }
-        }
-        Ok(())
+
+        Ok(installed_something)
     }
 
     fn reload_plasma(&self) -> Result<()> {

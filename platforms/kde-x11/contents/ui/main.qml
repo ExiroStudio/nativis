@@ -2,7 +2,7 @@ import QtQuick 2.15
 import org.kde.plasma.plasmoid 2.0
 import org.nativis 1.0
 
-WallpaperItem {
+Item {
     id: root
     
     NativisItem {

@@ -81,13 +81,33 @@ fn bundle_kde() {
 
     // 2. Assemble Bundle
     println!("Assembling bundle in {:?}...", bundle_dir);
+    
+    // User-space package UI
     let ui_dir = bundle_dir.join("contents/ui");
     fs::create_dir_all(&ui_dir).unwrap();
 
-    // Copy QML
     fs::copy(
         plasma_src_dir.join("demo.qml"),
         ui_dir.join("main.qml")
+    ).unwrap();
+
+    // System-space QML extension plugin
+    let system_qml_dir = bundle_dir.join("system-qml/org/nativis");
+    fs::create_dir_all(&system_qml_dir).unwrap();
+
+    fs::copy(
+        build_dir.join("libnativisplugin.so"),
+        system_qml_dir.join("libnativisplugin.so")
+    ).unwrap();
+
+    fs::write(
+        system_qml_dir.join("qmldir"),
+        "module org.nativis\nplugin nativisplugin\n"
+    ).unwrap();
+
+    fs::copy(
+        workspace_root.join("target/debug/libnativis_v1_core.so"),
+        system_qml_dir.join("libnativis_v1_core.so")
     ).unwrap();
 
     // Generate metadata.json
