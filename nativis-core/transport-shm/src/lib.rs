@@ -117,16 +117,21 @@ impl SurfaceOps for ShmSurface {
 
 use nativis_core::contract::{Frame, FrameSink, MediaError};
 use nativis_core::resource::{ResourceManager, CpuBuffer};
+use nativis_protocol::{
+    NativisFrameHeader, NativisAttachment, NATIVIS_MAGIC,
+    NATIVIS_ATTACHMENT_USAGE_COLOR, NATIVIS_FORMAT_RGBA8888,
+};
 
 pub struct ShmSink {
     surface: ShmSurface,
     resources: ResourceManager,
+    frame_count: u64,
 }
 
 impl ShmSink {
     pub fn new(name: &str, size: usize, resources: ResourceManager) -> Result<Self, String> {
         let surface = ShmSurface::new(name, size, true)?;
-        Ok(Self { surface, resources })
+        Ok(Self { surface, resources, frame_count: 0 })
     }
 }
 
@@ -134,21 +139,55 @@ impl FrameSink for ShmSink {
     fn submit(&mut self, frame: Frame) -> Result<(), MediaError> {
         let handle = self.surface.acquire().map_err(|e| MediaError::GpuUpload(e))?;
         
+        let mut frame_count_increment = 0;
         let success = self.resources.acquire(frame.resource, |res| {
             if let Some(cpu) = res.as_any().downcast_ref::<CpuBuffer>() {
-                // Copy frame data into SHM
+                let header_size = std::mem::size_of::<NativisFrameHeader>();
+                let att_size = std::mem::size_of::<NativisAttachment>();
+                let data_offset = (header_size + att_size) as u32;
+
+                let header = NativisFrameHeader {
+                    magic: NATIVIS_MAGIC,
+                    version: 2,
+                    frame_id: self.frame_count,
+                    timestamp: frame.pts.as_millis() as u64,
+                    attachment_count: 1,
+                    attachment_offset: header_size as u32,
+                };
+                
+                let attachment = NativisAttachment {
+                    usage: NATIVIS_ATTACHMENT_USAGE_COLOR,
+                    format: NATIVIS_FORMAT_RGBA8888,
+                    width: frame.width,
+                    height: frame.height,
+                    stride: frame.width * 4,
+                    planes: 1,
+                    surface_index: 0,
+                    data_offset,
+                };
+
+                // Write to SHM
                 unsafe {
+                    let ptr = handle.ptr;
+                    std::ptr::copy_nonoverlapping(&header as *const _ as *const u8, ptr, header_size);
+                    std::ptr::copy_nonoverlapping(&attachment as *const _ as *const u8, ptr.add(header_size), att_size);
+                    
+                    let data_ptr = ptr.add(data_offset as usize);
+                    let available_size = handle.size.saturating_sub(data_offset as usize);
                     std::ptr::copy_nonoverlapping(
                         cpu.data.as_ptr(),
-                        handle.ptr,
-                        std::cmp::min(cpu.data.len(), handle.size)
+                        data_ptr,
+                        std::cmp::min(cpu.data.len(), available_size)
                     );
                 }
+                frame_count_increment = 1;
                 true
             } else {
                 false
             }
         }).unwrap_or(false);
+
+        self.frame_count += frame_count_increment;
 
         self.surface.release(handle);
         

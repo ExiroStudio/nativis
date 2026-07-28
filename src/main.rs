@@ -3,8 +3,9 @@ use nativis_core::clock::MediaClock;
 use nativis_core::resource::ResourceManager;
 use nativis_plugin::PluginManager;
 use nativis_runtime::{Runtime, RuntimeConfig};
-use nativis_transport_shm::ShmSink;
 use nativis_plugin_image::ImageBackend;
+use nativis_platform_kde::KdePlatform;
+use nativis_core::platform::Platform;
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -33,11 +34,12 @@ fn main() -> anyhow::Result<()> {
     let clock = MediaClock::new();
     backend.open(&asset_path, &clock, &resources)?;
 
-    // 5. Initialize the frame sink (Transport layer)
-    // Create an SHM region big enough for a 4K frame (3840 * 2160 * 4 bytes)
-    // In a real system, the sink size might be dynamic based on the first frame.
-    let shm_size = 3840 * 2160 * 4;
-    let sink = Box::new(ShmSink::new("/nativis_shm", shm_size, resources).map_err(|e| anyhow::anyhow!(e))?);
+    // 5. Initialize the Platform
+    let mut platform = KdePlatform::new();
+    platform.bootstrap()?;
+    
+    // Create the frame sink via the platform
+    let sink = platform.create_sink(&resources)?;
 
     // 6. Run the Orchestrator
     let config = RuntimeConfig { target_fps: 60 };
@@ -45,5 +47,6 @@ fn main() -> anyhow::Result<()> {
 
     runtime.run(backend, sink)?;
 
+    // platform's Drop trait handles cleanup implicitly!
     Ok(())
 }

@@ -1,0 +1,17 @@
+{
+    "KPlugin": {
+        "Name": "Nativis Wallpaper",
+        "Description": "High-performance multimedia wallpaper engine",
+        "Id": "com.nativis.wallpaper",
+        "Version": "1.0",
+        "Category": "Wallpaper",
+        "Authors": [
+            {
+                "Name": "Nativis Contributors"
+            }
+        ],
+        "ServiceTypes": [
+            "Plasma/Wallpaper"
+        ]
+    }
+}

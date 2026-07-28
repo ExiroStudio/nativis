@@ -94,7 +94,7 @@ pub extern "C" fn nativis_get_pixels(ctx: *mut c_void) -> *mut u8 {
                         let attachments = unsafe { std::slice::from_raw_parts(attachments_ptr, header.attachment_count as usize) };
                         for att in attachments {
                             if att.usage == NATIVIS_ATTACHMENT_USAGE_COLOR {
-                                runtime.active_ptr = unsafe { ptr.add(256) };
+                                runtime.active_ptr = unsafe { ptr.add(att.data_offset as usize) };
                                 break;
                             }
                         }

@@ -1,5 +1,0 @@
-/var/www/nativis/scratch/nativis_v1_qml_plugin/build/CMakeFiles/nativisplugin.dir
-/var/www/nativis/scratch/nativis_v1_qml_plugin/build/CMakeFiles/edit_cache.dir
-/var/www/nativis/scratch/nativis_v1_qml_plugin/build/CMakeFiles/rebuild_cache.dir
-/var/www/nativis/scratch/nativis_v1_qml_plugin/build/CMakeFiles/nativisplugin_autogen_timestamp_deps.dir
-/var/www/nativis/scratch/nativis_v1_qml_plugin/build/CMakeFiles/nativisplugin_autogen.dir

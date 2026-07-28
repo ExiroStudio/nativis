@@ -6,5 +6,6 @@ edition.workspace = true
 [dependencies]
 nativis-asset = { workspace = true }
 nativis-rhi   = { workspace = true }
+anyhow        = { workspace = true }
 thiserror     = { workspace = true }
 tracing       = { workspace = true }

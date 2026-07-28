@@ -31,5 +31,5 @@ pub struct NativisAttachment {
     pub stride: u32,
     pub planes: u32,
     pub surface_index: u32,
-    pub _padding: u32, // Align to 64-bit boundary
+    pub data_offset: u32, // Offset in bytes from the start of the SHM region to the pixel data
 }
