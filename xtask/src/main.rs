@@ -81,32 +81,13 @@ fn bundle_kde() {
 
     // 2. Assemble Bundle
     println!("Assembling bundle in {:?}...", bundle_dir);
-    fs::create_dir_all(bundle_dir.join("contents/ui")).unwrap();
+    let ui_dir = bundle_dir.join("contents/ui");
+    fs::create_dir_all(&ui_dir).unwrap();
 
     // Copy QML
     fs::copy(
         plasma_src_dir.join("demo.qml"),
-        bundle_dir.join("contents/ui/main.qml")
-    ).unwrap();
-
-    // Copy .so
-    fs::copy(
-        build_dir.join("libnativisplugin.so"),
-        bundle_dir.join("contents/libnativisplugin.so") // Or wherever QML plugin expects it
-    ).unwrap();
-
-    // Copy qmldir
-    fs::write(
-        bundle_dir.join("contents/qmldir"),
-        "module org.nativis\nplugin nativisplugin .\n"
-    ).unwrap();
-
-    // Copy C-ABI .so so QML plugin can load it at runtime?
-    // Wait, QML plugin links against it. We should copy it to the bundle as well if it's dynamic.
-    // Or bundle libnativis_v1_core.so as well.
-    fs::copy(
-        workspace_root.join("target/debug/libnativis_v1_core.so"),
-        bundle_dir.join("contents/libnativis_v1_core.so")
+        ui_dir.join("main.qml")
     ).unwrap();
 
     // Generate metadata.json
@@ -125,7 +106,8 @@ fn bundle_kde() {
         "ServiceTypes": [
             "Plasma/Wallpaper"
         ]
-    }
+    },
+    "KPackageStructure": "Plasma/Wallpaper"
 }"#;
     fs::write(bundle_dir.join("metadata.json"), metadata).unwrap();
 

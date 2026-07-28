@@ -13,5 +13,6 @@
         "ServiceTypes": [
             "Plasma/Wallpaper"
         ]
-    }
+    },
+    "KPackageStructure": "Plasma/Wallpaper"
 }

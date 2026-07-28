@@ -93,7 +93,18 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         QSGTexture *texture = win->createTextureFromImage(img, QQuickWindow::TextureCanUseAtlas);
         node->setTexture(texture);
         node->setOwnsTexture(true);
-        node->setRect(boundingRect());
+
+        QRectF rect = boundingRect();
+        if (rect.width() <= 1.0 || rect.height() <= 1.0) {
+            if (parentItem() && parentItem()->width() > 1.0) {
+                rect = QRectF(0, 0, parentItem()->width(), parentItem()->height());
+            } else if (win->width() > 1) {
+                rect = QRectF(0, 0, win->width(), win->height());
+            } else {
+                rect = QRectF(0, 0, realW, realH);
+            }
+        }
+        node->setRect(rect);
     }
     
     qint64 copyTime = copyTimer.elapsed();

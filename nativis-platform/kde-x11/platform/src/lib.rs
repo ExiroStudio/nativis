@@ -46,6 +46,13 @@ impl KdePlatform {
         Self::copy_dir_recursive(&bundle_dir, &self.installed_plugin_dir)?;
 
         info!("KDE Plasma plugin installed to {:?}", self.installed_plugin_dir);
+
+        // Update KDE System Configuration Cache (sycoca) so Plasma recognizes the new wallpaper plugin
+        let _ = Command::new("kbuildsycoca5")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
         Ok(true) // indicates we installed something, so plasma might need reload
     }
 
@@ -74,7 +81,7 @@ impl KdePlatform {
                 "org.kde.plasmashell",
                 "/PlasmaShell",
                 "org.kde.PlasmaShell.evaluateScript",
-                "var Desktops = desktops(); for (i=0;i<Desktops.length;i++) { d = Desktops[i]; d.wallpaperPlugin = 'com.nativis.wallpaper'; }",
+                "var Desktops = desktops(); for (i=0;i<Desktops.length;i++) { d = Desktops[i]; d.wallpaperPlugin = 'org.kde.image'; d.wallpaperPlugin = 'com.nativis.wallpaper'; }",
             ])
             .output()?;
 
