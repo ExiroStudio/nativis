@@ -35,10 +35,15 @@ NativisItem::~NativisItem()
 
 void NativisItem::itemChange(ItemChange change, const ItemChangeData &value)
 {
-    if (change == ItemSceneChange && value.window) {
-        // Tie rendering to vsync by updating on frame swapped
-        connect(value.window, &QQuickWindow::frameSwapped, this, &NativisItem::triggerUpdate);
-        triggerUpdate();
+    if (change == ItemSceneChange) {
+        if (window()) {
+            disconnect(window(), &QQuickWindow::frameSwapped, this, &NativisItem::triggerUpdate);
+        }
+        if (value.window) {
+            // Tie rendering to vsync by updating on frame swapped
+            connect(value.window, &QQuickWindow::frameSwapped, this, &NativisItem::triggerUpdate);
+            triggerUpdate();
+        }
     }
     QQuickItem::itemChange(change, value);
 }
@@ -54,9 +59,11 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     totalTimer.start();
     
     QSGSimpleTextureNode *node = static_cast<QSGSimpleTextureNode *>(oldNode);
+    bool isNewNode = false;
     if (!node) {
         node = new QSGSimpleTextureNode();
         node->setFiltering(QSGTexture::Linear);
+        isNewNode = true;
     }
 
     int w = qMax(1, static_cast<int>(width()));
@@ -67,6 +74,10 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     
     // Abstract RenderTarget C ABI
     if (!nativis_begin_frame(m_runtimeCtx, w, h)) {
+        if (isNewNode) {
+            delete node;
+            return nullptr;
+        }
         return node;
     }
     
