@@ -1,0 +1,11 @@
+[package]
+name    = "nativis-plugin-image"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nativis-core  = { workspace = true }
+nativis-asset = { workspace = true }
+image         = { workspace = true }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }

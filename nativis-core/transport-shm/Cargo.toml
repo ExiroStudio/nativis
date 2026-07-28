@@ -8,3 +8,4 @@ authors.workspace = true
 [dependencies]
 libc = "0.2"
 nativis-protocol = { path = "../protocol" }
+nativis-core = { path = "../core" }

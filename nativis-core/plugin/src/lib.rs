@@ -24,15 +24,15 @@ struct BackendEntry {
     factory: BackendFactory,
 }
 
-/// Central registry of all available media backends.
+/// Central manager for all available media backends.
 ///
-/// The runtime creates one `PluginRegistry` at startup, registers built-in
-/// backends, then calls `create_backend()` for each media open request.
-pub struct PluginRegistry {
+/// The Application creates one `PluginManager` at startup, registers built-in
+/// backends, then calls `open()` for each media open request.
+pub struct PluginManager {
     entries: Vec<BackendEntry>,
 }
 
-impl PluginRegistry {
+impl PluginManager {
     pub fn new() -> Self {
         Self { entries: Vec::new() }
     }
@@ -52,8 +52,8 @@ impl PluginRegistry {
     /// Find and instantiate a backend that supports the given `AssetPath`.
     ///
     /// Returns `None` if no registered backend supports the URI.
-    /// The runtime never decides which backend to use — the registry does.
-    pub fn create_backend(&self, source: &AssetPath) -> Option<Box<dyn MediaBackend>> {
+    /// The application uses this to open a media file without knowing the backend.
+    pub fn open(&self, source: &AssetPath) -> Option<Box<dyn MediaBackend>> {
         for entry in &self.entries {
             // Probe using a temporary instance — supports() is cheap.
             let probe = (entry.factory)();
@@ -72,6 +72,6 @@ impl PluginRegistry {
     pub fn is_empty(&self) -> bool { self.entries.is_empty() }
 }
 
-impl Default for PluginRegistry {
+impl Default for PluginManager {
     fn default() -> Self { Self::new() }
 }

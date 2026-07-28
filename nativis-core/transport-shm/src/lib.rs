@@ -18,6 +18,9 @@ pub struct ShmSurface {
     ptr: *mut c_void,
 }
 
+unsafe impl Send for ShmSurface {}
+unsafe impl Sync for ShmSurface {}
+
 impl ShmSurface {
     /// Creates or opens a POSIX shared memory object.
     /// If `create` is true, it creates it with the given size.
@@ -109,5 +112,50 @@ impl SurfaceOps for ShmSurface {
 
     fn release(&self, _handle: SurfaceHandle) {
         // No-op for basic SHM.
+    }
+}
+
+use nativis_core::contract::{Frame, FrameSink, MediaError};
+use nativis_core::resource::{ResourceManager, CpuBuffer};
+
+pub struct ShmSink {
+    surface: ShmSurface,
+    resources: ResourceManager,
+}
+
+impl ShmSink {
+    pub fn new(name: &str, size: usize, resources: ResourceManager) -> Result<Self, String> {
+        let surface = ShmSurface::new(name, size, true)?;
+        Ok(Self { surface, resources })
+    }
+}
+
+impl FrameSink for ShmSink {
+    fn submit(&mut self, frame: Frame) -> Result<(), MediaError> {
+        let handle = self.surface.acquire().map_err(|e| MediaError::GpuUpload(e))?;
+        
+        let success = self.resources.acquire(frame.resource, |res| {
+            if let Some(cpu) = res.as_any().downcast_ref::<CpuBuffer>() {
+                // Copy frame data into SHM
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        cpu.data.as_ptr(),
+                        handle.ptr,
+                        std::cmp::min(cpu.data.len(), handle.size)
+                    );
+                }
+                true
+            } else {
+                false
+            }
+        }).unwrap_or(false);
+
+        self.surface.release(handle);
+        
+        if !success {
+            return Err(MediaError::GpuUpload("Invalid resource type or handle for ShmSink".into()));
+        }
+        
+        Ok(())
     }
 }

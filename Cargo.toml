@@ -12,10 +12,11 @@ members = [
     "nativis-core/transport-shm",
     "nativis-core/runtime",
     "nativis-core/event",
-    "nativis-core/producer-image",
+
+    # Plugins
+    "plugins/image_backend",
 
     # Platform (KDE Plasma X11)
-    "nativis-platform/kde-x11/daemon",
     "nativis-platform/kde-x11/plasma-plugin",
 ]
 
@@ -67,6 +68,7 @@ nativis-plugin   = { path = "nativis-core/plugin" }
 nativis-runtime  = { path = "nativis-core/runtime" }
 nativis-protocol = { path = "nativis-core/protocol" }
 nativis-transport-shm = { path = "nativis-core/transport-shm" }
+nativis-plugin-image = { path = "plugins/image_backend" }
 
 # ── Binary (nativis-cli placeholder) ─────────────────────────────────────────
 [package]
@@ -78,3 +80,10 @@ edition.workspace = true
 tracing-subscriber   = { workspace = true }
 tracing              = { workspace = true }
 anyhow               = { workspace = true }
+
+nativis-core          = { workspace = true }
+nativis-plugin        = { workspace = true }
+nativis-runtime       = { workspace = true }
+nativis-transport-shm = { workspace = true }
+nativis-asset         = { workspace = true }
+nativis-plugin-image  = { workspace = true }

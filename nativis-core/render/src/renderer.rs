@@ -8,7 +8,7 @@
 //!   3. Post      — Optional PostEffect chain
 //!   4. Present  — IRhiBackend::present()
 
-use nativis_core::contract::{FrameStatus, RenderFrame};
+use nativis_core::contract::{FrameStatus, Frame};
 use nativis_rhi::{IRhiBackend, TextureFormat};
 use tracing::{debug, warn};
 
@@ -19,7 +19,7 @@ use crate::post::PostEffect;
 pub struct Renderer {
     blit:        Option<BlitPipeline>,
     post_effects: Vec<Box<dyn PostEffect>>,
-    last_frame:  Option<RenderFrame>,
+    last_frame:  Option<Frame>,
 }
 
 impl Renderer {
@@ -93,6 +93,10 @@ impl Renderer {
             // Post-effects: if any are registered, render to an intermediate
             // texture, then chain through each effect to the surface.
             // For now (no effects), blit directly to surface.
+            
+            // FIXME(V6): Renderer needs access to ResourceManager to resolve Frame::resource
+            // into a TextureHandle for wgpu blitting. Disabled temporarily.
+            /*
             if self.post_effects.is_empty() {
                 blit.execute(
                     ctx.device(),
@@ -110,6 +114,7 @@ impl Renderer {
                     surface_view,
                 );
             }
+            */
         }
 
         // ── Pass 4: Present ───────────────────────────────────────────────────

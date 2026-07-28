@@ -9,7 +9,12 @@ use thiserror::Error;
 
 use crate::clock::MediaClock;
 use nativis_asset::AssetPath;
-use nativis_rhi::{RhiContext, TextureHandle};
+
+// ── Resource System ──────────────────────────────────────────────────────────
+
+/// Opaque handle to a media resource (CPU buffer, GPU texture, DMA-BUF, etc.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ResourceHandle(pub u64);
 
 // ── Capability set ────────────────────────────────────────────────────────────
 
@@ -36,24 +41,21 @@ pub enum MediaCapability {
     Subtitle,
 }
 
-// ── RenderFrame ───────────────────────────────────────────────────────────────
-
-/// A decoded, GPU-resident frame ready for rendering.
+/// A decoded frame ready for transport or rendering.
 ///
-/// The render engine receives this value from `MediaBackend::current_frame()`.
-/// It carries no GPU driver types — `TextureHandle` is an opaque RHI handle.
+/// Carries no implementation details. The resource could be in CPU RAM, GPU VRAM,
+/// or a DMA-BUF file descriptor. The `FrameSink` will resolve it.
 #[derive(Debug, Clone)]
-pub struct RenderFrame {
-    /// Handle to the GPU texture containing pixel data.
-    pub texture: TextureHandle,
+pub struct Frame {
+    /// Opaque handle to the actual pixel data.
+    pub resource: ResourceHandle,
     /// Pixel width of the frame.
     pub width: u32,
     /// Pixel height of the frame.
     pub height: u32,
     /// Presentation timestamp within the media stream.
     pub pts: Duration,
-    /// When `true`, the frame has no transparent pixels — the renderer may
-    /// skip blending and use a simpler opaque blit pass.
+    /// When `true`, the frame has no transparent pixels.
     pub is_opaque: bool,
 }
 
@@ -65,14 +67,21 @@ pub struct RenderFrame {
 /// - `Ready`      → upload/bind and render the new frame.
 /// - `Unchanged`  → reuse the previously bound texture.
 /// - `EndOfStream`→ stop rendering or loop, depending on policy.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum FrameStatus {
     /// A new frame is available for rendering.
-    Ready(RenderFrame),
+    Ready(Frame),
     /// The media has not advanced; the last frame is still valid.
     Unchanged,
     /// The media stream has ended.
     EndOfStream,
+}
+
+// ── FrameSink ─────────────────────────────────────────────────────────────────
+
+/// Transport boundary. The runtime calls this to push frames to the platform.
+pub trait FrameSink: Send + Sync {
+    fn submit(&mut self, frame: Frame) -> Result<(), MediaError>;
 }
 
 // ── Error ─────────────────────────────────────────────────────────────────────
@@ -107,14 +116,13 @@ pub trait MediaBackend: Send + Sync {
     /// Human-readable backend name (e.g. `"image_backend"`).
     fn name(&self) -> &'static str;
 
-    /// Open and initialize the media source.
     ///
-    /// `rhi` must be stored internally for subsequent GPU uploads.
+    /// The backend can allocate resources via a context passed by the Application.
     fn open(
         &mut self,
         source: &AssetPath,
-        rhi: &RhiContext,
         clock: &MediaClock,
+        resources: &crate::resource::ResourceManager,
     ) -> Result<(), MediaError>;
 
     /// Advance the media clock and upload any new decoded data to the GPU.
