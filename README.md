@@ -9,8 +9,18 @@ Nativis is a blazingly fast, multi-process multimedia wallpaper engine designed 
 - **Zero-Copy Rendering Overhead**: Uses POSIX Shared Memory (SHM) to transport high-resolution frames (e.g., 4K textures) across processes seamlessly.
 - **Native Desktop Integration**: Injects directly into the host shell (e.g., `plasmashell`) rather than drawing a fake window behind your desktop icons.
 - **Robust Architecture**: Built in Rust for memory safety, utilizing a modular plugin system for multimedia backends.
-- **Multimedia Support**: Currently supports rendering static Images and Video files. *(Note: Performance for 4K video playback is still unstable and currently being optimized.)*
 - **Single-Instance Guard**: Built-in IPC sockets prevent resource conflicts and memory tearing.
+
+## 🎞️ Media Support
+
+| Media Type | Support Status | Notes |
+|------------|----------------|-------|
+| **Images** | 🟢 Stable       | Supports standard formats (JPG, PNG, etc.). |
+| **Videos** | 🟡 Beta        | Standard resolutions work well. **4K video playback is currently unstable** and undergoing optimization. |
+| **HTML5**  | 🚧 Planned      | Future support for interactive web wallpapers. |
+
+> [!NOTE] 
+> **Rendering Architecture:** Currently, the entire rendering engine relies purely on **CPU** processing. We are actively planning to migrate heavy workloads (such as video decoding and texture rendering) to the **GPU** in future updates to improve efficiency and reduce system load.
 
 ## 🚀 Supported Environments
 Nativis is built to be cross-platform, but currently focuses on deep integration with Linux Desktop Environments.
