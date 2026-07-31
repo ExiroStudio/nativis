@@ -48,6 +48,7 @@ signals:
 protected:
     void run() override {
         quint64 lastSeen = 0;
+
         while (m_running.load(std::memory_order_relaxed)) {
             quint64 current = nativis_get_frame_id(m_ctx);
             if (current != lastSeen) {
@@ -81,12 +82,6 @@ protected:
 
 private:
     void* m_runtimeCtx = nullptr;
-
-    // Phase 0 — instrumentation
-    int     m_frameCount      = 0;
-    qint64  m_totalAllocUs    = 0;
-    qint64  m_totalUploadUs   = 0;
-    qint64  m_totalFrameUs    = 0;
 
     // Phase 1 — event-driven rendering
     FrameWatcher* m_watcher   = nullptr;

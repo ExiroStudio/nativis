@@ -4,6 +4,7 @@ use nativis_core::resource::ResourceManager;
 use nativis_plugin::PluginManager;
 use nativis_runtime::{Runtime, RuntimeConfig};
 use nativis_plugin_image::ImageBackend;
+use nativis_plugin_video::VideoBackend;
 use nativis_platform_kde::KdePlatform;
 use nativis_core::platform::Platform;
 
@@ -35,6 +36,7 @@ fn main() -> anyhow::Result<()> {
 
     // Register built-in plugins
     plugin_manager.register("image_backend", || Box::new(ImageBackend::new()));
+    plugin_manager.register("video_backend", || Box::new(VideoBackend::new()));
 
     // 3. Find and instantiate the correct backend
     let mut backend = plugin_manager.open(&asset_path)
