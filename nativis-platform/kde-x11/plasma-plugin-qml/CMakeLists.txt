@@ -26,11 +26,11 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
 
 # Link against the Rust runtime
 target_link_libraries(${PLUGIN_NAME} PRIVATE
-    ${CMAKE_SOURCE_DIR}/../../../target/debug/libnativis_v1_core.so
+    ${CMAKE_SOURCE_DIR}/../../../target/release/libnativis_v1_core.so
 )
 
 set_target_properties(${PLUGIN_NAME} PROPERTIES
-    INSTALL_RPATH "${CMAKE_SOURCE_DIR}/../../../target/debug"
+    INSTALL_RPATH "$ORIGIN"
     BUILD_WITH_INSTALL_RPATH TRUE
 )
 

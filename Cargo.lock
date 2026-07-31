@@ -787,6 +787,7 @@ dependencies = [
  "nativis-platform-kde",
  "nativis-plugin",
  "nativis-plugin-image",
+ "nativis-plugin-video",
  "nativis-runtime",
  "nativis-transport-shm",
  "tracing",
@@ -861,6 +862,18 @@ name = "nativis-plugin-image"
 version = "0.1.0"
 dependencies = [
  "image",
+ "nativis-asset",
+ "nativis-core",
+ "thiserror 2.0.19",
+ "tracing",
+]
+
+[[package]]
+name = "nativis-plugin-video"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "ffmpeg-next",
  "nativis-asset",
  "nativis-core",
  "thiserror 2.0.19",

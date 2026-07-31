@@ -1,0 +1,17 @@
+[package]
+name = "nativis-plugin-video"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+nativis-core  = { workspace = true }
+nativis-asset = { workspace = true }
+
+tracing   = { workspace = true }
+thiserror = { workspace = true }
+crossbeam-channel = { workspace = true }
+
+# Direct libav bindings. Version 7.x supports libavcodec 60.x (FFmpeg 6.1).
+ffmpeg-next = "7"

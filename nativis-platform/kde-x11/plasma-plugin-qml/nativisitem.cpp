@@ -7,18 +7,6 @@
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
 
-// ── Phase 0: instrumentation knob ──────────────────────────────────────────
-// Set to 0 to compile out all timing/logging with zero overhead.
-#define NATIVIS_INSTRUMENTATION 1
-static constexpr int kLogEveryNFrames = 300; // ~5 s at 60 FPS
-
-#if NATIVIS_INSTRUMENTATION
-#  define NATIVIS_TIMER_START(t)  QElapsedTimer t; t.start()
-#  define NATIVIS_TIMER_US(t)     (t.nsecsElapsed() / 1000)
-#else
-#  define NATIVIS_TIMER_START(t)  do {} while(0)
-#  define NATIVIS_TIMER_US(t)     0LL
-#endif
 // ───────────────────────────────────────────────────────────────────────────
 
 extern "C" {
@@ -95,9 +83,6 @@ void NativisItem::itemChange(ItemChange change, const ItemChangeData &value)
 
 QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
 {
-    // ── Phase 0: total frame timer ─────────────────────────────────────────
-    NATIVIS_TIMER_START(totalTimer);
-
     // ── Geometry ───────────────────────────────────────────────────────────
     int w = qMax(1, static_cast<int>(width()));
     int h = qMax(1, static_cast<int>(height()));
@@ -144,9 +129,6 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
                         || (realH != m_texH);
 
     if (needsNewTexture) {
-        // ── Phase 0: allocation timer ──────────────────────────────────────
-        NATIVIS_TIMER_START(allocTimer);
-
         // Deallocate old texture when resolution changes
         delete m_texture;
         m_texture = nullptr;
@@ -159,33 +141,20 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
 
         node->setTexture(m_texture);
         node->setOwnsTexture(false); // NativisItem owns m_texture, not the node
-
-        qint64 allocUs = NATIVIS_TIMER_US(allocTimer);
-        m_totalAllocUs += allocUs;
-
-        qDebug().nospace() << "[NATIVIS] Texture (re)allocated: "
-                           << realW << "x" << realH
-                           << "  alloc=" << allocUs << "µs";
     } else {
-        // ── Phase 0: upload timer ──────────────────────────────────────────
-        NATIVIS_TIMER_START(uploadTimer);
-
         // Reuse existing GPU texture — upload new pixels only.
         // glTexSubImage2D does NOT allocate; it writes into existing GPU memory.
         QOpenGLContext *glCtx = QOpenGLContext::currentContext();
         if (glCtx) {
             QOpenGLFunctions *f = glCtx->functions();
-            // Bind our texture's underlying GL object
             GLuint texId = static_cast<GLuint>(m_texture->textureId());
             f->glBindTexture(GL_TEXTURE_2D, texId);
             f->glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
                                realW, realH,
                                GL_RGBA, GL_UNSIGNED_BYTE,
                                pixels);
+            node->markDirty(QSGNode::DirtyMaterial);
         }
-
-        qint64 uploadUs = NATIVIS_TIMER_US(uploadTimer);
-        m_totalUploadUs += uploadUs;
     }
 
     // ── Rect ──────────────────────────────────────────────────────────────
@@ -199,25 +168,6 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
             rect = QRectF(0, 0, realW, realH);
     }
     node->setRect(rect);
-
-    // ── Phase 0: log summary every N frames ───────────────────────────────
-    m_frameCount++;
-    qint64 frameUs = NATIVIS_TIMER_US(totalTimer);
-    m_totalFrameUs += frameUs;
-
-#if NATIVIS_INSTRUMENTATION
-    if (m_frameCount % kLogEveryNFrames == 0) {
-        double avgAlloc  = static_cast<double>(m_totalAllocUs)  / kLogEveryNFrames;
-        double avgUpload = static_cast<double>(m_totalUploadUs) / kLogEveryNFrames;
-        double avgFrame  = static_cast<double>(m_totalFrameUs)  / kLogEveryNFrames;
-        qDebug().nospace()
-            << "[NATIVIS METRICS] frame=" << m_frameCount
-            << "  avg_alloc="  << avgAlloc  << "µs"
-            << "  avg_upload=" << avgUpload << "µs"
-            << "  avg_total="  << avgFrame  << "µs";
-        m_totalAllocUs = m_totalUploadUs = m_totalFrameUs = 0;
-    }
-#endif
 
     return node;
 }

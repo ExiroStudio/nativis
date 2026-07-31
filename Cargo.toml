@@ -15,6 +15,7 @@ members = [
 
     # Plugins
     "plugins/image_backend",
+    "plugins/video_backend",
 
     # Platform (KDE Plasma X11)
     "nativis-platform/kde-x11/plasma-plugin", "nativis-platform/kde-x11/platform", "xtask",
@@ -69,6 +70,7 @@ nativis-runtime  = { path = "nativis-core/runtime" }
 nativis-protocol = { path = "nativis-core/protocol" }
 nativis-transport-shm = { path = "nativis-core/transport-shm" }
 nativis-plugin-image = { path = "plugins/image_backend" }
+nativis-plugin-video = { path = "plugins/video_backend" }
 nativis-platform-kde = { path = "nativis-platform/kde-x11/platform" }
 
 # ── Binary (nativis-cli placeholder) ─────────────────────────────────────────
@@ -88,4 +90,5 @@ nativis-runtime       = { workspace = true }
 nativis-transport-shm = { workspace = true }
 nativis-asset         = { workspace = true }
 nativis-plugin-image  = { workspace = true }
+nativis-plugin-video  = { workspace = true }
 nativis-platform-kde  = { workspace = true }
