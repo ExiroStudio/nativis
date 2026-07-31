@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt5 COMPONENTS Core Gui Qml Quick REQUIRED)
+find_package(Qt5 COMPONENTS Core Gui Qml Quick OpenGL REQUIRED)
 
 # The plugin module name
 set(PLUGIN_NAME nativisplugin)
@@ -21,6 +21,7 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
     Qt5::Gui
     Qt5::Qml
     Qt5::Quick
+    Qt5::OpenGL
 )
 
 # Link against the Rust runtime

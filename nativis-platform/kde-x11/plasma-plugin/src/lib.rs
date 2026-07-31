@@ -182,3 +182,36 @@ pub extern "C" fn nativis_get_height(ctx: *mut c_void) -> c_int {
 #[no_mangle]
 pub extern "C" fn nativis_end_frame(_ctx: *mut c_void) {
 }
+
+#[no_mangle]
+pub extern "C" fn nativis_get_frame_id(ctx: *mut c_void) -> u64 {
+    if ctx.is_null() { return 0; }
+    let runtime = unsafe { &*(ctx as *const NativisConsumer) };
+
+    // Read frame_id directly from SHM — do NOT use last_frame_id.
+    //
+    // last_frame_id is a cache updated only inside nativis_get_pixels(),
+    // which only runs when the render thread calls updatePaintNode().
+    // If the FrameWatcher reads last_frame_id, it sees a stale value:
+    //
+    //   old runtime stops  → last_frame_id = 1000
+    //   new runtime starts → SHM frame_id resets to 0, 1, 2...
+    //   FrameWatcher reads last_frame_id = 1000 (forever)
+    //   1000 == lastSeen(1000) → no signal → wallpaper never changes
+    //
+    // Reading SHM directly fixes this: the watcher always sees the live value.
+    if let Some(shm) = &runtime.shm {
+        if let Ok(handle) = shm.acquire() {
+            if handle.size >= std::mem::size_of::<NativisFrameHeader>() {
+                let header = unsafe { &*(handle.ptr as *const NativisFrameHeader) };
+                if header.magic == nativis_protocol::NATIVIS_MAGIC {
+                    return header.frame_id;
+                }
+            }
+        }
+    }
+
+    // SHM not available yet — fall back to cached value
+    runtime.last_frame_id
+}
+
