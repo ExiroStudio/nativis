@@ -87,10 +87,10 @@ anyhow               = { workspace = true }
 nativis-core          = { workspace = true }
 nativis-plugin        = { workspace = true }
 nativis-runtime       = { workspace = true }
-nativis-transport-shm = { workspace = true }
 nativis-asset         = { workspace = true }
 nativis-plugin-image  = { workspace = true }
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 nativis-plugin-video  = { workspace = true }
 nativis-platform-kde  = { workspace = true }
+nativis-transport-shm = { workspace = true }
