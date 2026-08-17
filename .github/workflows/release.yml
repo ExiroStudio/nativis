@@ -17,15 +17,9 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_name: nativis-linux-amd64
-            apt_arch: ''
-          - os: ubuntu-latest
-            target: i686-unknown-linux-gnu
-            artifact_name: nativis-linux-i686
-            apt_arch: ':i386'
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact_name: nativis-linux-aarch64
-            apt_arch: ':arm64'
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: nativis-windows-amd64.exe
@@ -47,40 +41,10 @@ jobs:
       - name: Setup Linux Dependencies
         if: runner.os == 'Linux'
         run: |
-          if [ "${{ matrix.apt_arch }}" == ":i386" ]; then
-            sudo dpkg --add-architecture i386
-            sudo apt-get update
-            sudo apt-get install -y gcc-multilib g++-multilib
-          elif [ "${{ matrix.apt_arch }}" == ":arm64" ]; then
-            sudo dpkg --add-architecture arm64
-            sudo apt-get update
-            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-          else
-            sudo apt-get update
-          fi
+          sudo apt-get update
+          sudo apt-get install -y cmake pkg-config qtdeclarative5-dev plasma-workspace-dev kpackagetool5 libavformat-dev libavcodec-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev libavdevice-dev clang
           
-          # Install FFMpeg and KDE deps for the target architecture
-          sudo apt-get install -y cmake pkg-config qtdeclarative5-dev${{ matrix.apt_arch }} plasma-workspace-dev${{ matrix.apt_arch }} kpackagetool5 libavformat-dev${{ matrix.apt_arch }} libavcodec-dev${{ matrix.apt_arch }} libavutil-dev${{ matrix.apt_arch }} libavfilter-dev${{ matrix.apt_arch }} libswscale-dev${{ matrix.apt_arch }} libswresample-dev${{ matrix.apt_arch }} libavdevice-dev${{ matrix.apt_arch }} clang
-          
-      - name: Cache vcpkg packages
-        if: runner.os == 'Windows'
-        uses: actions/cache@v4
-        with:
-          path: |
-            C:\vcpkg\installed
-            C:\vcpkg\buildtrees
-            C:\vcpkg\packages
-            C:\vcpkg\downloads
-          key: ${{ runner.os }}-vcpkg-ffmpeg-${{ matrix.vcpkg_triplet }}
-          
-      - name: Setup Windows Dependencies (vcpkg)
-        if: runner.os == 'Windows'
-        run: |
-          vcpkg integrate install
-          vcpkg install ffmpeg:${{ matrix.vcpkg_triplet }}
-        env:
-          VCPKG_ROOT: 'C:\vcpkg'
+
 
       - name: Build Engine (All)
         run: cargo build --release --bin nativis --target ${{ matrix.target }}

@@ -36,7 +36,7 @@ fn bundle_kde() {
     // 1. Build Rust cdylib
     println!("Building Rust C-ABI for KDE Plasma Plugin...");
     let status = Command::new("cargo")
-        .args(&["build", "-p", "nativis-v1-core"])
+        .args(&["build", "--release", "-p", "nativis-v1-core"])
         .current_dir(&workspace_root)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -106,7 +106,7 @@ fn bundle_kde() {
     ).unwrap();
 
     fs::copy(
-        workspace_root.join("target/debug/libnativis_v1_core.so"),
+        workspace_root.join("target/release/libnativis_v1_core.so"),
         system_qml_dir.join("libnativis_v1_core.so")
     ).unwrap();
 
