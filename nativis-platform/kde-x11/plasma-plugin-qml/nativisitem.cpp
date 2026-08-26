@@ -249,6 +249,10 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
             f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            // GL_UNPACK_ALIGNMENT default is 4 bytes. RGBA was always safe (4 B/px),
+            // but GL_RED (1 B/px) rows aren't guaranteed to land on a 4-byte boundary.
+            // Without this, GL silently pads each row, desyncing every row after the first.
+            f->glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
             f->glPixelStorei(GL_UNPACK_ROW_LENGTH, yStride);
             f->glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, realW, realH, 0,
                            GL_RED, GL_UNSIGNED_BYTE, yData);
@@ -262,18 +266,23 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
             f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             f->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            f->glPixelStorei(GL_UNPACK_ALIGNMENT, 1); // same reasoning as Y: GL_RG is 2 B/px
             f->glPixelStorei(GL_UNPACK_ROW_LENGTH, uvStride / 2); // GL_RG = 2 bytes/pixel
             f->glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, uvWidth, uvHeight, 0,
                            GL_RG, GL_UNSIGNED_BYTE, uvData);
 
             f->glPixelStorei(GL_UNPACK_ROW_LENGTH, 0); // reset
+            f->glPixelStorei(GL_UNPACK_ALIGNMENT, 4);  // restore GL default for other callers
 
             m_nv12W = realW;
             m_nv12H = realH;
             m_nv12Active = true;
         } else {
             // ── Fast path: reuse existing GL textures, upload only ──
+            // Same GL_UNPACK_ALIGNMENT reasoning as the allocation branch above —
+            // this path runs on nearly every frame, so it's the one that mattered most.
             f->glBindTexture(GL_TEXTURE_2D, m_yTex);
+            f->glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
             f->glPixelStorei(GL_UNPACK_ROW_LENGTH, yStride);
             f->glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, realW, realH,
                               GL_RED, GL_UNSIGNED_BYTE, yData);
@@ -286,6 +295,7 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
                               GL_RG, GL_UNSIGNED_BYTE, uvData);
 
             f->glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+            f->glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
         }
 
         // ── Build / reuse scene graph node with NV12 material ──────────
