@@ -22,7 +22,7 @@
 //! ```text
 //! VideoBackend
 //!   owns
-//!     ├── ResourceManager clone  (shared with Runtime — registers CpuBuffers)
+//!     ├── ResourceManager clone  (shared with Runtime — registers PlanarBuffers)
 //!     ├── Decoder thread         (background OS thread, exits when channel drops)
 //!     └── Frame queue            (crossbeam bounded(2) Receiver<DecodedFrame>)
 //!
@@ -32,7 +32,7 @@
 //!
 //! ResourceManager  (Arc<Mutex<...>>, shared via clone)
 //!   owns
-//!     └── CpuBuffer per active frame  (freed on the next tick via resources.free())
+//!     └── PlanarBuffer per active frame  (freed on the next tick via resources.free())
 //! ```
 //! Dropping VideoBackend drops the Receiver, which signals the decoder thread to exit.
 
@@ -54,7 +54,7 @@ use nativis_asset::AssetPath;
 use nativis_core::{
     clock::MediaClock,
     contract::{Frame, FrameStatus, MediaBackend, MediaCapability, MediaError, ResourceHandle},
-    resource::{CpuBuffer, ResourceManager},
+    resource::{PlanarBuffer, PlaneDesc, PixelFormat, ResourceManager},
 };
 
 pub use frame::DecodedFrame;
@@ -67,7 +67,7 @@ const METRICS_INTERVAL: u64 = 300; // log every N published frames
 pub struct VideoBackend {
     rx:           Option<Receiver<DecodedFrame>>,
     stop_signal:  Option<Arc<AtomicBool>>,
-    /// ResourceManager clone — used to register/free CpuBuffers each tick.
+    /// ResourceManager clone — used to register/free PlanarBuffers each tick.
     /// ResourceManager is Arc-backed so clone is cheap.
     resources:    Option<ResourceManager>,
     /// Handle of the frame registered in the last tick (freed next tick).
@@ -219,7 +219,7 @@ impl MediaBackend for VideoBackend {
         self.pending = None;
 
         if let Some(df) = selected {
-            // Free the CpuBuffer from the previous tick.
+            // Free the PlanarBuffer from the previous tick.
             if let Some(old) = self.last_handle.take() {
                 resources.free(old);
             }
@@ -228,12 +228,15 @@ impl MediaBackend for VideoBackend {
             let width   = df.width;
             let height  = df.height;
 
-            // Register the immutable pixel data as a CpuBuffer.
-            // Arc::from() is already zero-copy from the decoder side.
-            let buf = CpuBuffer {
-                data:   df.pixels.to_vec(), // single copy: Arc→Vec for ResourceManager
+            // Register NV12 planar data — Arc::clone is refcount-only, NO memcpy.
+            let buf = PlanarBuffer {
+                format: PixelFormat::Nv12,
                 width,
                 height,
+                planes: vec![
+                    PlaneDesc { data: df.y_plane.clone(),  stride: df.y_stride },
+                    PlaneDesc { data: df.uv_plane.clone(), stride: df.uv_stride },
+                ],
             };
             let handle = resources.register(Box::new(buf));
             self.last_handle = Some(handle);
@@ -311,6 +314,7 @@ fn decoder_thread(
 
     let mut decode_count:    u64 = 0;
     let mut total_decode_us: u64 = 0;
+    let mut total_scale_us:  u64 = 0;
     let mut thread_window         = Instant::now();
 
     // Outer loop: restart from the top for seamless looping at EOF.
@@ -339,17 +343,17 @@ fn decoder_thread(
 
         let mut scaler = Scaler::get(
             src_fmt, w, h,
-            Pixel::RGBA, w, h,
+            Pixel::NV12, w, h,
             ScaleFlags::BILINEAR,
         ).expect("scaler context");
 
         info!(
-            "[NATIVIS DECODE] Opened: {}x{} {:?} tb={}/{}",
+            "[NATIVIS DECODE] Opened: {}x{} {:?} → NV12 tb={}/{}",
             w, h, src_fmt, tb.numerator(), tb.denominator()
         );
 
         let mut raw  = ffmpeg::util::frame::video::Video::empty();
-        let mut rgba = ffmpeg::util::frame::video::Video::new(Pixel::RGBA, w, h);
+        let mut nv12 = ffmpeg::util::frame::video::Video::new(Pixel::NV12, w, h);
 
         for (stream_ref, packet) in ictx.packets() {
             if stop.load(Ordering::Acquire) { break 'outer; }
@@ -359,12 +363,23 @@ fn decoder_thread(
             if decoder.send_packet(&packet).is_err() { continue; }
 
             while decoder.receive_frame(&mut raw).is_ok() {
-                if scaler.run(&raw, &mut rgba).is_err() { continue; }
+                let t_decode_done = Instant::now();
+                if scaler.run(&raw, &mut nv12).is_err() { continue; }
+                let t_scale_done = Instant::now();
 
-                // Build immutable DecodedFrame — all FFmpeg data is copied here.
-                // `rgba.data(0)` is a slice into FFmpeg's internal buffer.
-                // We Arc it immediately so ownership transfers cleanly.
-                let pixels: Arc<[u8]> = Arc::from(rgba.data(0));
+                let decode_us = t_decode_done.duration_since(t0).as_micros() as u64;
+                let scale_us  = t_scale_done.duration_since(t_decode_done).as_micros() as u64;
+
+                // PENTING: stride SEBENARNYA dari FFmpeg, bukan diasumsikan width*N.
+                // FFmpeg sering align ke 32 byte untuk SIMD, jadi stride >= width.
+                let y_stride  = nv12.stride(0) as u32;
+                let uv_stride = nv12.stride(1) as u32;
+                let chroma_h  = (h + 1) / 2; // NV12: tinggi UV plane = ceil(height/2)
+
+                // Build immutable DecodedFrame with NV12 planes.
+                // Arc::from copies from FFmpeg's internal buffer — wajib, satu-satunya copy.
+                let y_plane:  Arc<[u8]> = Arc::from(nv12.data(0));
+                let uv_plane: Arc<[u8]> = Arc::from(nv12.data(1));
 
                 let df = DecodedFrame {
                     width:         w,
@@ -372,20 +387,30 @@ fn decoder_thread(
                     pts:           raw.pts().unwrap_or(0),
                     time_base_num: tb.numerator(),
                     time_base_den: tb.denominator(),
-                    pixels,
+                    y_plane,
+                    uv_plane,
+                    y_stride,
+                    uv_stride,
+                    chroma_height: chroma_h,
                 };
 
-                let us = t0.elapsed().as_micros() as u64;
-                total_decode_us += us;
+                total_decode_us += decode_us;
+                total_scale_us  += scale_us;
                 decode_count    += 1;
 
                 if decode_count % METRICS_INTERVAL == 0 {
                     let elapsed_s = thread_window.elapsed().as_secs_f64();
                     let fps       = decode_count as f64 / elapsed_s.max(0.001);
-                    let avg_us    = total_decode_us / decode_count.max(1);
-                    info!("[NATIVIS DECODE] decode_fps={:.1} avg_decode_us={}µs", fps, avg_us);
+                    let avg_dec   = total_decode_us / decode_count.max(1);
+                    let avg_scl   = total_scale_us  / decode_count.max(1);
+                    info!(
+                        "[NATIVIS DECODE] decode_fps={:.1} avg_decode_us={}µs avg_scale_us={}µs (scale_pct={:.0}%)",
+                        fps, avg_dec, avg_scl,
+                        (avg_scl as f64 / (avg_dec + avg_scl).max(1) as f64) * 100.0
+                    );
                     decode_count    = 0;
                     total_decode_us = 0;
+                    total_scale_us  = 0;
                     thread_window   = Instant::now();
                 }
 

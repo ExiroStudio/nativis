@@ -138,7 +138,7 @@ pub extern "C" fn nativis_get_width(ctx: *mut c_void) -> c_int {
                         let attachments_ptr = unsafe { ptr.add(offset) as *const NativisAttachment };
                         let attachments = unsafe { std::slice::from_raw_parts(attachments_ptr, header.attachment_count as usize) };
                         for att in attachments {
-                            if att.usage == NATIVIS_ATTACHMENT_USAGE_COLOR {
+                            if att.usage == NATIVIS_ATTACHMENT_USAGE_COLOR && att.surface_index == 0 {
                                 return att.width as c_int;
                             }
                         }
@@ -167,7 +167,7 @@ pub extern "C" fn nativis_get_height(ctx: *mut c_void) -> c_int {
                         let attachments_ptr = unsafe { ptr.add(offset) as *const NativisAttachment };
                         let attachments = unsafe { std::slice::from_raw_parts(attachments_ptr, header.attachment_count as usize) };
                         for att in attachments {
-                            if att.usage == NATIVIS_ATTACHMENT_USAGE_COLOR {
+                            if att.usage == NATIVIS_ATTACHMENT_USAGE_COLOR && att.surface_index == 0 {
                                 return att.height as c_int;
                             }
                         }
@@ -215,3 +215,100 @@ pub extern "C" fn nativis_get_frame_id(ctx: *mut c_void) -> u64 {
     runtime.last_frame_id
 }
 
+// ── Fase 5: Generic plane-based FFI ─────────────────────────────────────────
+//
+// These functions allow the C++ consumer to access NV12 (or any multi-plane)
+// data by index, without needing a new FFI function per plane type.
+// `nativis_get_pixels` is preserved for RGBA backward compat.
+
+/// Helper: read color attachments from SHM.
+/// Returns None if SHM is not ready or magic mismatch.
+unsafe fn read_color_attachments(runtime: &NativisConsumer) -> Option<(*mut u8, Vec<NativisAttachment>)> {
+    let shm = runtime.shm.as_ref()?;
+    let handle = shm.acquire().ok()?;
+    let ptr = handle.ptr;
+    if handle.size < std::mem::size_of::<NativisFrameHeader>() {
+        return None;
+    }
+    let header = &*(ptr as *const NativisFrameHeader);
+    if header.magic != nativis_protocol::NATIVIS_MAGIC {
+        return None;
+    }
+    let offset = header.attachment_offset as usize;
+    let count = header.attachment_count as usize;
+    if handle.size < offset + count * std::mem::size_of::<NativisAttachment>() {
+        return None;
+    }
+    let att_ptr = ptr.add(offset) as *const NativisAttachment;
+    let all = std::slice::from_raw_parts(att_ptr, count);
+    let color_atts: Vec<NativisAttachment> = all.iter()
+        .filter(|a| a.usage == NATIVIS_ATTACHMENT_USAGE_COLOR)
+        .copied()
+        .collect();
+    Some((ptr, color_atts))
+}
+
+/// Returns the pixel format of the current frame (NATIVIS_FORMAT_* constant).
+/// Returns 0 if no frame is available.
+#[no_mangle]
+pub extern "C" fn nativis_get_format(ctx: *mut c_void) -> u32 {
+    if ctx.is_null() { return 0; }
+    let runtime = unsafe { &mut *(ctx as *mut NativisConsumer) };
+    runtime.ensure_shm();
+    
+    unsafe {
+        if let Some((_ptr, atts)) = read_color_attachments(runtime) {
+            if let Some(first) = atts.first() {
+                return first.format;
+            }
+        }
+    }
+    0
+}
+
+/// Returns the number of color planes in the current frame.
+/// RGBA = 1, NV12 = 2, YUV420P = 3, etc.
+#[no_mangle]
+pub extern "C" fn nativis_get_plane_count(ctx: *mut c_void) -> u32 {
+    if ctx.is_null() { return 0; }
+    let runtime = unsafe { &mut *(ctx as *mut NativisConsumer) };
+    runtime.ensure_shm();
+    
+    unsafe {
+        if let Some((_ptr, atts)) = read_color_attachments(runtime) {
+            return atts.len() as u32;
+        }
+    }
+    0
+}
+
+/// Get a pointer to plane data by index, along with its stride/width/height.
+/// index 0 = Y plane (or RGBA), index 1 = UV plane, etc.
+/// Returns null if index is out of range or no frame available.
+#[no_mangle]
+pub extern "C" fn nativis_get_plane(
+    ctx: *mut c_void,
+    index: u32,
+    out_stride: *mut u32,
+    out_width: *mut u32,
+    out_height: *mut u32,
+) -> *mut u8 {
+    if ctx.is_null() { return ptr::null_mut(); }
+    let runtime = unsafe { &mut *(ctx as *mut NativisConsumer) };
+    runtime.ensure_shm();
+    
+    unsafe {
+        if let Some((base_ptr, atts)) = read_color_attachments(runtime) {
+            // Find the attachment with matching surface_index
+            for att in &atts {
+                if att.surface_index == index {
+                    if !out_stride.is_null() { *out_stride = att.stride; }
+                    if !out_width.is_null()  { *out_width  = att.width;  }
+                    if !out_height.is_null() { *out_height = att.height; }
+                    return base_ptr.add(att.data_offset as usize);
+                }
+            }
+        }
+    }
+    ptr::null_mut()
+}

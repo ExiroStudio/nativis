@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-/// A single video frame that has been decoded and scaled to RGBA.
+/// A single video frame that has been decoded to NV12 planar format.
 ///
 /// Immutable after creation. The decoder has no further interaction with it.
 /// The Runtime and Transport layer receive this purely as data.
@@ -24,9 +24,16 @@ pub struct DecodedFrame {
     /// later without floating-point accumulation error.
     pub time_base_num: i32,
     pub time_base_den: i32,
-    /// Shared RGBA pixel data. `Arc<[u8]>` enables zero-copy hand-off:
-    /// the channel holds one ref, the runtime holds another.
-    pub pixels:    Arc<[u8]>,
+    /// Y plane (luma) — full resolution, 1 byte per pixel.
+    pub y_plane:       Arc<[u8]>,
+    /// UV plane (chroma, interleaved) — half resolution.
+    pub uv_plane:      Arc<[u8]>,
+    /// Stride (bytes per row) of the Y plane — may be > width due to alignment.
+    pub y_stride:      u32,
+    /// Stride (bytes per row) of the UV plane — may be > width due to alignment.
+    pub uv_stride:     u32,
+    /// Height of the chroma plane: ceil(height / 2).
+    pub chroma_height: u32,
 }
 
 impl DecodedFrame {

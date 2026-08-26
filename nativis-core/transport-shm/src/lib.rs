@@ -116,10 +116,10 @@ impl SurfaceOps for ShmSurface {
 }
 
 use nativis_core::contract::{Frame, FrameSink, MediaError};
-use nativis_core::resource::{ResourceManager, CpuBuffer};
+use nativis_core::resource::{ResourceManager, CpuBuffer, PlanarBuffer};
 use nativis_protocol::{
     NativisFrameHeader, NativisAttachment, NATIVIS_MAGIC,
-    NATIVIS_ATTACHMENT_USAGE_COLOR, NATIVIS_FORMAT_RGBA8888,
+    NATIVIS_ATTACHMENT_USAGE_COLOR, NATIVIS_FORMAT_RGBA8888, NATIVIS_FORMAT_NV12,
 };
 
 pub struct ShmSink {
@@ -141,7 +141,87 @@ impl FrameSink for ShmSink {
         
         let mut frame_count_increment = 0;
         let success = self.resources.acquire(frame.resource, |res| {
-            if let Some(cpu) = res.as_any().downcast_ref::<CpuBuffer>() {
+            // ── NV12 multi-plane path (video) ──────────────────────────────
+            if let Some(planar) = res.as_any().downcast_ref::<PlanarBuffer>() {
+                let header_size = std::mem::size_of::<NativisFrameHeader>();
+                let att_size    = std::mem::size_of::<NativisAttachment>();
+                let att_count   = planar.planes.len() as u32; // 2 untuk NV12
+                let data_start  = header_size + att_size * att_count as usize;
+
+                let format_code = match planar.format {
+                    nativis_core::resource::PixelFormat::Nv12 => NATIVIS_FORMAT_NV12,
+                    _ => NATIVIS_FORMAT_NV12, // extensible for P010 etc.
+                };
+
+                let mut attachments = Vec::with_capacity(planar.planes.len());
+                let mut cursor = data_start as u32;
+
+                for (i, plane) in planar.planes.iter().enumerate() {
+                    let (pw, ph) = if i == 0 {
+                        (planar.width, planar.height)          // plane Y: resolusi penuh
+                    } else {
+                        // UV plane: half width/height in samples
+                        // byte-width UV = planar.width (2 bytes per sample pair)
+                        ((planar.width + 1) / 2, (planar.height + 1) / 2)
+                    };
+                    attachments.push(NativisAttachment {
+                        usage: NATIVIS_ATTACHMENT_USAGE_COLOR,
+                        format: format_code,
+                        width: pw,
+                        height: ph,
+                        stride: plane.stride,     // stride SEBENARNYA dari FFmpeg
+                        planes: att_count,
+                        surface_index: i as u32,  // 0 = Y, 1 = UV
+                        data_offset: cursor,
+                    });
+                    cursor += plane.stride * ph;
+                }
+
+                // ── Urutan penulisan (Fase 8 safety) ──
+                // 1. Tulis SEMUA data pixel dulu (kedua plane)
+                // 2. Tulis attachment array
+                // 3. Tulis header (frame_id) PALING TERAKHIR
+                unsafe {
+                    let ptr = handle.ptr;
+
+                    // 1. Pixel data
+                    for (att, plane) in attachments.iter().zip(planar.planes.iter()) {
+                        let dst = ptr.add(att.data_offset as usize);
+                        let len = std::cmp::min(
+                            plane.data.len(),
+                            handle.size.saturating_sub(att.data_offset as usize),
+                        );
+                        std::ptr::copy_nonoverlapping(plane.data.as_ptr(), dst, len);
+                    }
+
+                    // 2. Attachment array
+                    let att_ptr = ptr.add(header_size);
+                    std::ptr::copy_nonoverlapping(
+                        attachments.as_ptr() as *const u8,
+                        att_ptr,
+                        att_size * attachments.len(),
+                    );
+
+                    // 3. Header LAST — frame_id signals "data is complete"
+                    let header = NativisFrameHeader {
+                        magic: NATIVIS_MAGIC,
+                        version: 2,
+                        frame_id: self.frame_count,
+                        timestamp: frame.pts.as_millis() as u64,
+                        attachment_count: att_count,
+                        attachment_offset: header_size as u32,
+                    };
+                    std::ptr::copy_nonoverlapping(
+                        &header as *const _ as *const u8,
+                        ptr,
+                        header_size,
+                    );
+                }
+                frame_count_increment = 1;
+                true
+            }
+            // ── RGBA single-plane path (image_backend) — TIDAK BERUBAH ──
+            else if let Some(cpu) = res.as_any().downcast_ref::<CpuBuffer>() {
                 let header_size = std::mem::size_of::<NativisFrameHeader>();
                 let att_size = std::mem::size_of::<NativisAttachment>();
                 let data_offset = (header_size + att_size) as u32;
@@ -198,3 +278,4 @@ impl FrameSink for ShmSink {
         Ok(())
     }
 }
+
