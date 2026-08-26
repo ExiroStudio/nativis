@@ -22,6 +22,34 @@ impl Resource for CpuBuffer {
     }
 }
 
+/// Format piksel untuk buffer planar. Menambah varian di masa depan (P010, dst.)
+/// tidak mengubah signature fungsi manapun — hanya menambah satu match arm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PixelFormat {
+    Nv12,
+    // P010 ditambahkan di sini nanti, tanpa ubah struct manapun
+}
+
+/// Satu plane data mentah + stride SEBENARNYA (bukan diasumsikan width*N).
+#[derive(Clone)]
+pub struct PlaneDesc {
+    pub data:   Arc<[u8]>,
+    pub stride: u32,
+}
+
+/// Buffer CPU multi-plane (video). Setara CpuBuffer tapi generik jumlah plane.
+pub struct PlanarBuffer {
+    pub format:  PixelFormat,
+    pub width:   u32,
+    pub height:  u32,
+    pub planes:  Vec<PlaneDesc>, // NV12 = 2 elemen: [Y, UV]
+}
+
+impl Resource for PlanarBuffer {
+    fn as_any(&self) -> &dyn Any { self }
+}
+
 /// Central registry for media resources.
 /// Shared between MediaBackends (producers) and FrameSinks (consumers).
 #[derive(Clone, Default)]

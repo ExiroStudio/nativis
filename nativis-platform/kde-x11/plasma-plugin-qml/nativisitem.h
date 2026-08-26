@@ -17,7 +17,17 @@ extern "C" {
     void     nativis_render(void* ctx);
     void     nativis_end_frame(void* ctx);
     uint64_t nativis_get_frame_id(void* ctx);  // Phase 1: frame change detection
+
+    // Fase 5: Generic plane-based FFI
+    uint32_t nativis_get_format(void* ctx);
+    uint32_t nativis_get_plane_count(void* ctx);
+    uint8_t* nativis_get_plane(void* ctx, uint32_t index,
+                               uint32_t* out_stride, uint32_t* out_width, uint32_t* out_height);
 }
+
+// Protocol format constants (must match nativis-protocol)
+#define NATIVIS_FORMAT_RGBA8888 1
+#define NATIVIS_FORMAT_NV12     2
 
 // ---------------------------------------------------------------------------
 // FrameWatcher — Phase 1
@@ -86,10 +96,20 @@ private:
     // Phase 1 — event-driven rendering
     FrameWatcher* m_watcher   = nullptr;
 
-    // Phase 2 — persistent texture
+    // Phase 2 — persistent texture (RGBA fallback path)
     QSGTexture*   m_texture   = nullptr;
     int           m_texW      = 0;
     int           m_texH      = 0;
+
+    // Fase 6 — NV12 dual texture (uint32_t = GLuint, avoids GL header in .h)
+    uint32_t      m_yTex      = 0;
+    uint32_t      m_uvTex     = 0;
+    int           m_nv12W     = 0;  // tracked Y-plane width for realloc detection
+    int           m_nv12H     = 0;  // tracked Y-plane height for realloc detection
+    bool          m_nv12Active = false; // true when NV12 pipeline is in use
+
+    // Fase 7 — frame-id gating
+    uint64_t      m_lastUploadedFrameId = 0;
 };
 
 #endif // NATIVISITEM_H
