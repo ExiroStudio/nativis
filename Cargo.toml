@@ -19,6 +19,9 @@ members = [
 
     # Platform (KDE Plasma X11)
     "nativis-platform/kde-x11/plasma-plugin", "nativis-platform/kde-x11/platform", "xtask",
+
+    # GUI (Iced settings panel)
+    "nativis-gui",
 ]
 
 [workspace.package]

@@ -1,0 +1,12 @@
+[package]
+name    = "nativis-gui"
+version.workspace = true
+edition.workspace = true
+description = "Nativis settings panel — plugin & platform layer manager (Iced GUI)"
+
+[[bin]]
+name = "nativis-gui"
+path = "src/main.rs"
+
+[dependencies]
+iced = { version = "0.13", features = ["tokio"] }
