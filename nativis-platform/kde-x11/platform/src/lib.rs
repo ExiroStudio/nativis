@@ -23,7 +23,7 @@ impl KdePlatform {
         }
     }
 
-    fn check_and_install_bundle(&self) -> Result<bool> {
+    fn check_and_install_bundle(&self, force: bool) -> Result<bool> {
         let bundle_dir = Path::new("./platforms/kde-x11");
         if !bundle_dir.exists() {
             warn!("Bundle directory not found at {:?}", bundle_dir);
@@ -37,7 +37,7 @@ impl KdePlatform {
         let system_plugin_so = system_qml_target.join("libnativisplugin.so");
         let bundle_system_qml = bundle_dir.join("system-qml/org/nativis");
         
-        let needs_install = !system_plugin_so.exists() || {
+        let needs_install = force || !system_plugin_so.exists() || {
             let qmldir_path = system_qml_target.join("qmldir");
             qmldir_path.exists() && std::fs::read_to_string(qmldir_path).unwrap_or_default().contains("plugin nativisplugin .")
         };
@@ -118,11 +118,11 @@ impl KdePlatform {
 }
 
 impl Platform for KdePlatform {
-    fn bootstrap(&mut self) -> Result<()> {
-        info!("Bootstrapping KdePlatform...");
+    fn bootstrap(&mut self, force: bool) -> Result<()> {
+        info!("Bootstrapping KdePlatform (force={})...", force);
         
-        // 1. Check and install bundle if necessary
-        let installed = self.check_and_install_bundle()?;
+        // 1. Check and install bundle if necessary or forced
+        let installed = self.check_and_install_bundle(force)?;
         
         // 2. Reload plasmashell if we installed or updated
         if installed {
