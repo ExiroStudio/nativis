@@ -33,10 +33,20 @@ fn main() -> anyhow::Result<()> {
 
     tracing_subscriber::fmt::init();
 
-    // 1. Simple CLI parsing (Nativis V1 just takes the URI as the first arg)
+    // 1. Simple CLI parsing
     let args: Vec<String> = std::env::args().collect();
+    let force_reinstall = args.iter().any(|a| a == "--reinstall-platform");
+
+    #[cfg(not(target_os = "windows"))]
+    if force_reinstall {
+        let mut platform = KdePlatform::new();
+        platform.bootstrap(true)?;
+        println!("Platform reinstalled successfully.");
+        return Ok(());
+    }
+
     if args.len() < 2 {
-        eprintln!("Usage: nativis <media_uri>");
+        eprintln!("Usage: nativis <media_uri> or nativis --reinstall-platform");
         std::process::exit(1);
     }
     let uri = &args[1];
@@ -64,7 +74,7 @@ fn main() -> anyhow::Result<()> {
     #[cfg(not(target_os = "windows"))]
     let sink = {
         let mut platform = KdePlatform::new();
-        platform.bootstrap()?;
+        platform.bootstrap(false)?;
         platform.create_sink(&resources)?
     };
 
