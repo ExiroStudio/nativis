@@ -109,7 +109,12 @@ private:
     bool          m_nv12Active = false; // true when NV12 pipeline is in use
 
     // Fase 7 — frame-id gating
-    uint64_t      m_lastUploadedFrameId = 0;
+    // Initialized to UINT64_MAX so the very first frame from the backend
+    // (frame_id = 0) is never equal and always triggers an upload.
+    // If initialized to 0, the gating check "currentFrameId == 0 == lastUploaded"
+    // would permanently skip the first frame, keeping the wallpaper black.
+    uint64_t      m_lastUploadedFrameId = UINT64_MAX;
+
 };
 
 #endif // NATIVISITEM_H

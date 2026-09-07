@@ -8,5 +8,6 @@ authors = ["Exiro"]
 crate-type = ["cdylib"]
 
 [dependencies]
+libc = "0.2"
 nativis-protocol = { path = "../../../nativis-core/protocol" }
 nativis-transport-shm = { path = "../../../nativis-core/transport-shm" }

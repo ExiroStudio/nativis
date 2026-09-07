@@ -932,6 +932,7 @@ dependencies = [
 name = "nativis-v1-core"
 version = "1.0.0"
 dependencies = [
+ "libc",
  "nativis-protocol",
  "nativis-transport-shm",
 ]
