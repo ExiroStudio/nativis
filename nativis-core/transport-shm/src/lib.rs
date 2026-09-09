@@ -131,7 +131,15 @@ pub struct ShmSink {
 impl ShmSink {
     pub fn new(name: &str, size: usize, resources: ResourceManager) -> Result<Self, String> {
         let surface = ShmSurface::new(name, size, true)?;
-        Ok(Self { surface, resources, frame_count: 0 })
+        // frame_count starts at 1, not 0.
+        //
+        // frame_id = 0 is reserved as the "no frame / backend not ready" sentinel.
+        // FrameWatcher initializes lastSeen = 0, so it only emits a signal when
+        // frame_id changes away from 0. If frame_count started at 0, the very
+        // first frame would have frame_id = 0 = lastSeen → no signal ever emitted
+        // on cold boot (where SHM didn't exist when the plugin first initialised).
+        // Starting at 1 guarantees the first real frame always produces a signal.
+        Ok(Self { surface, resources, frame_count: 1 })
     }
 }
 

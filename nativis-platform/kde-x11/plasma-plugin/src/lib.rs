@@ -1,8 +1,10 @@
 use std::os::raw::{c_void, c_int};
 use std::ptr;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use nativis_protocol::{NativisFrameHeader, NativisAttachment, NATIVIS_ATTACHMENT_USAGE_COLOR};
 use nativis_transport_shm::{ShmSurface, SurfaceOps};
+
 
 #[no_mangle]
 pub extern "C" fn nativis_version() -> u32 {
@@ -11,6 +13,10 @@ pub extern "C" fn nativis_version() -> u32 {
 
 pub struct NativisConsumer {
     shm: Mutex<Option<ShmSurface>>,
+    // Timestamp (ms) of the last shm_open attempt when SHM was unavailable.
+    // Throttles reconnect attempts to at most once per 100ms, preventing a
+    // flood of 240 syscalls/sec from the FrameWatcher poll loop.
+    last_shm_attempt: AtomicU64,
     last_frame_id: u64,
     // We keep a fallback buffer just in case the producer hasn't started yet
     fallback_buffer: Vec<u8>,
@@ -19,10 +25,17 @@ pub struct NativisConsumer {
     active_ptr: *mut u8,
 }
 
+fn monotonic_ms() -> u64 {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts); }
+    (ts.tv_sec as u64) * 1000 + (ts.tv_nsec as u64) / 1_000_000
+}
+
 impl NativisConsumer {
     fn new() -> Self {
         Self {
             shm: Mutex::new(ShmSurface::new("/nativis_shm", 0, false).ok()),
+            last_shm_attempt: AtomicU64::new(0),
             last_frame_id: 0,
             fallback_buffer: Vec::new(),
             width: 0,
@@ -32,17 +45,33 @@ impl NativisConsumer {
     }
 
     fn ensure_shm(&self) {
-        if let Ok(mut shm_guard) = self.shm.lock() {
-            let needs_reopen = match &*shm_guard {
-                Some(s) => !s.is_valid(),
-                None => true,
-            };
-            if needs_reopen {
-                *shm_guard = ShmSurface::new("/nativis_shm", 0, false).ok();
+        // Fast path: if SHM is already valid, skip entirely.
+        // This is the common case once the backend is running.
+        if let Ok(guard) = self.shm.lock() {
+            if guard.as_ref().map(|s| s.is_valid()).unwrap_or(false) {
+                return;
             }
+        }
+
+        // Slow path: SHM is None or invalid — throttle reconnect to
+        // at most once every 100ms to avoid flooding shm_open syscalls.
+        let now = monotonic_ms();
+        let last = self.last_shm_attempt.load(Ordering::Relaxed);
+        if now.saturating_sub(last) < 100 {
+            return;
+        }
+        self.last_shm_attempt.store(now, Ordering::Relaxed);
+
+        if let Ok(mut guard) = self.shm.lock() {
+            // Re-check under the lock — another thread may have reconnected.
+            if guard.as_ref().map(|s| s.is_valid()).unwrap_or(false) {
+                return;
+            }
+            *guard = ShmSurface::new("/nativis_shm", 0, false).ok();
         }
     }
 }
+
 
 #[no_mangle]
 pub extern "C" fn nativis_create() -> *mut c_void {
