@@ -3,6 +3,7 @@
 #include <QQuickWindow>
 #include <QImage>
 #include <QDebug>
+#include <QDateTime>
 #include <QElapsedTimer>
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
@@ -208,13 +209,22 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         nativis_end_frame(m_runtimeCtx);
         return oldNode; // no new frame — skip upload
     }
-    m_lastUploadedFrameId = currentFrameId;
+    // NOTE: m_lastUploadedFrameId is intentionally NOT updated here anymore.
+    // It must only be set once the frame has actually been uploaded to a GL
+    // texture and a node has been returned — otherwise a transient failure
+    // below (window not ready, plane data not ready, GL context not current)
+    // permanently "burns" this frame_id as already-handled, even though
+    // nothing was ever rendered. See bottom of each path for the real update.
 
     // ── Detect format ──────────────────────────────────────────────────────
     uint32_t format = nativis_get_format(m_runtimeCtx);
 
     QQuickWindow *win = window();
-    if (!win) return oldNode;
+    if (!win) {
+        qDebug() << "[nativis-debug] updatePaintNode: win==null, frameId=" << currentFrameId
+                  << "t=" << QDateTime::currentMSecsSinceEpoch();
+        return oldNode;
+    }
 
     // ── NV12 path (Fase 6) ─────────────────────────────────────────────────
     if (format == NATIVIS_FORMAT_NV12) {
@@ -227,13 +237,33 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         nativis_render(m_runtimeCtx);
         nativis_end_frame(m_runtimeCtx);
 
-        if (!yData || !uvData || yW == 0 || yH == 0) return oldNode;
+        if (!yData || !uvData || yW == 0 || yH == 0) {
+            qDebug() << "[nativis-debug] updatePaintNode: plane data not ready, frameId=" << currentFrameId
+                      << "yData=" << (void*)yData << "uvData=" << (void*)uvData
+                      << "t=" << QDateTime::currentMSecsSinceEpoch();
+            return oldNode;
+        }
 
         int realW = static_cast<int>(yW);
         int realH = static_cast<int>(yH);
 
         QOpenGLContext *glCtx = QOpenGLContext::currentContext();
-        if (!glCtx) return oldNode;
+        if (!glCtx) {
+            qDebug() << "[nativis-debug] updatePaintNode: glCtx==null, frameId=" << currentFrameId
+                      << "t=" << QDateTime::currentMSecsSinceEpoch();
+            return oldNode;
+        }
+
+        // Capture whether oldNode was ALREADY an NV12 QSGGeometryNode before this
+        // frame's reallocation logic mutates m_nv12Active below. Checking the
+        // post-mutation value here caused a node-type confusion bug: on the very
+        // first RGBA-fallback -> NV12 transition (only reachable on cold boot,
+        // when updatePaintNode's first automatic call happens before SHM exists),
+        // oldNode is a QSGSimpleTextureNode, but m_nv12Active had already been set
+        // true by the realloc block below, so the stale node was wrongly reused
+        // and its material force-cast to Nv12Material* — corrupting scene graph
+        // state and permanently freezing the render on the old black texture.
+        const bool wasNv12Active = m_nv12Active;
         QOpenGLFunctions *f = glCtx->functions();
 
         // ── Allocate or reallocate GL textures on resolution change ──
@@ -302,7 +332,7 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         QSGGeometryNode *geoNode = static_cast<QSGGeometryNode *>(oldNode);
         Nv12Material *material = nullptr;
 
-        if (!geoNode || !m_nv12Active) {
+        if (!geoNode || !wasNv12Active) {
             // Delete old node entirely if switching from RGBA to NV12
             delete oldNode;
 
@@ -336,10 +366,16 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         QSGGeometry::updateTexturedRectGeometry(geoNode->geometry(), rect, QRectF(0, 0, 1, 1));
         geoNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
 
+        m_lastUploadedFrameId = currentFrameId; // frame actually uploaded — safe to gate on now
         return geoNode;
     }
 
     // ── RGBA fallback path (image_backend, or format not NV12) ────────────
+    // Same capture-before-mutate reasoning as the NV12 branch above: we need to
+    // know whether oldNode was built as a QSGSimpleTextureNode (wasNv12Active
+    // false) BEFORE we overwrite m_nv12Active, otherwise a stale NV12
+    // QSGGeometryNode could get force-cast to QSGSimpleTextureNode* below.
+    const bool wasNv12ActiveRgba = m_nv12Active;
     m_nv12Active = false;
 
     uint8_t* pixels = nativis_get_pixels(m_runtimeCtx);
@@ -354,8 +390,15 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     if (!pixels) return oldNode;
 
     // ── Build / reuse scene graph node ────────────────────────────────────
-    QSGSimpleTextureNode *node = static_cast<QSGSimpleTextureNode *>(oldNode);
+    // Only reuse oldNode as a QSGSimpleTextureNode if it was actually built as
+    // one last frame (wasNv12ActiveRgba == false). If the previous frame was
+    // NV12, oldNode is really a plain QSGGeometryNode — casting it and calling
+    // QSGSimpleTextureNode-only methods on it would be undefined behavior.
+    QSGSimpleTextureNode *node = wasNv12ActiveRgba ? nullptr : static_cast<QSGSimpleTextureNode *>(oldNode);
     if (!node) {
+        if (wasNv12ActiveRgba) {
+            delete oldNode; // discard stale NV12 node — wrong type, not reusable here
+        }
         node = new QSGSimpleTextureNode();
         node->setFiltering(QSGTexture::Linear);
     }
@@ -403,5 +446,6 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     }
     node->setRect(rect);
 
+    m_lastUploadedFrameId = currentFrameId; // frame actually uploaded — safe to gate on now
     return node;
 }

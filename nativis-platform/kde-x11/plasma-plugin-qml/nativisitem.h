@@ -5,6 +5,8 @@
 #include <QThread>
 #include <QAtomicInteger>
 #include <QtGlobal>
+#include <QDebug>
+#include <QDateTime>
 
 extern "C" {
     uint32_t nativis_version();
@@ -58,11 +60,17 @@ signals:
 protected:
     void run() override {
         quint64 lastSeen = 0;
+        int debugEmitCount = 0; // TEMP: cap logging so video framerate doesn't flood journalctl
 
         while (m_running.load(std::memory_order_relaxed)) {
             quint64 current = nativis_get_frame_id(m_ctx);
             if (current != lastSeen) {
                 lastSeen = current;
+                if (debugEmitCount < 20) {
+                    qDebug() << "[nativis-debug] FrameWatcher emit newFrameAvailable, frameId=" << current
+                              << "t=" << QDateTime::currentMSecsSinceEpoch();
+                    ++debugEmitCount;
+                }
                 emit newFrameAvailable(current);
             }
             msleep(4); // ~240 Hz ceiling, negligible CPU when idle
