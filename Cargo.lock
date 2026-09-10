@@ -926,6 +926,7 @@ dependencies = [
  "libc",
  "nativis-core",
  "nativis-protocol",
+ "tracing",
 ]
 
 [[package]]
