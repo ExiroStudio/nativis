@@ -1,74 +1,112 @@
 <div align="center">
   <h1>🌌 Nativis</h1>
-  <p><b>High-Performance Native Live Wallpaper Engine built with Rust</b></p>
+  <p><b>Experimental native live-wallpaper engine for KDE Plasma 5 on X11</b></p>
+  <p>Rust · FFmpeg · Qt 5 · POSIX Shared Memory</p>
 </div>
 
-Nativis is a blazingly fast, multi-process multimedia wallpaper engine designed to integrate deeply with your desktop environment. It bypasses traditional overlay windows by pushing pixel data directly into the compositor's native rendering pipeline using POSIX Shared Memory (SHM).
+Nativis is an experimental native live-wallpaper engine written primarily in Rust. It renders decoded media frames into a POSIX shared-memory surface which is consumed by a KDE Plasma wallpaper plugin, rather than placing a window behind the desktop.
 
-## ✨ Features
-- **Zero-Copy Rendering Overhead**: Uses POSIX Shared Memory (SHM) to transport high-resolution frames (e.g., 4K textures) across processes seamlessly.
-- **Native Desktop Integration**: Injects directly into the host shell (e.g., `plasmashell`) rather than drawing a fake window behind your desktop icons.
-- **Robust Architecture**: Built in Rust for memory safety, utilizing a modular plugin system for multimedia backends.
-- **Single-Instance Guard**: Built-in IPC sockets prevent resource conflicts and memory tearing.
+## ✨ Current Status
 
-## 🎞️ Media Support
+The repository currently targets **KDE Plasma 5 on X11**. The implementation is still under active development; it should not be treated as a general-purpose or production-ready cross-platform wallpaper application.
 
-| Media Type | Support Status | Notes |
-|------------|----------------|-------|
-| **Images** | 🟢 Stable       | Supports standard formats (JPG, PNG, etc.). |
-| **Videos** | 🟡 Beta        | Standard resolutions work well. **4K video playback is currently unstable** and undergoing optimization. |
-| **HTML5**  | 🚧 Planned      | Future support for interactive web wallpapers. |
+| Area | Current implementation |
+| --- | --- |
+| Desktop integration | KDE Plasma 5 wallpaper package with a Qt 5 QML plugin |
+| Display server | X11 |
+| Frame transport | POSIX shared memory (`/nativis_shm`) |
+| Image input | Local PNG, JPEG, WebP, BMP, GIF, and TGA files |
+| Video input | Local MP4, MKV, WebM, AVI, MOV, TS, FLV, M4V, and WMV files, decoded with FFmpeg |
+| Playback | Videos loop; the runtime targets 60 FPS |
+| Other platforms / HTML wallpapers | Not implemented |
 
-> [!NOTE] 
-> **Rendering Architecture:** Currently, the entire rendering engine relies purely on **CPU** processing. We are actively planning to migrate heavy workloads (such as video decoding and texture rendering) to the **GPU** in future updates to improve efficiency and reduce system load.
+Image frames are converted to RGBA on the CPU. Video frames are decoded by FFmpeg on a background thread and transported as NV12 planes. The project contains a WGPU-based rendering abstraction, but the current KDE path passes CPU-accessible frames through shared memory; it is not a GPU-accelerated wallpaper pipeline.
 
-## 🚀 Supported Environments
-Nativis is built to be cross-platform, but currently focuses on deep integration with Linux Desktop Environments.
+## 🧩 Architecture
 
-| Platform / Desktop | Display Server | Support Status | Method |
-|--------------------|----------------|----------------|--------|
-| **KDE Plasma 5**   | X11            | 🟢 **Stable**  | Native System QML Plugin (C++ `NativisItem`) |
-| **KDE Plasma 6**   | Wayland        | 🚧 Planned     | Layer Shell / KWin Ext |
-| **GNOME**          | Wayland / X11  | 🚧 Planned     | TBD |
-| **Windows**        | DWM            | 🚧 Planned     | WorkerW Injection |
-
-## 🛠️ Prerequisites
-To compile Nativis, you will need the following dependencies installed on your system:
-- **Rust Toolchain** (latest stable)
-- **CMake** & **Make**
-- **KDE & Qt5 Development Headers**: `qtdeclarative5-dev`, `plasma-workspace-dev`, `kpackagetool5`
-
-## 📦 Building from Source
-Nativis uses a custom Cargo `xtask` to orchestrate the build process across Rust and C++ components.
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/ExiroStudio/nativis.git
-   cd nativis
-   ```
-
-2. **Build the Desktop Integration Bundle**
-   ```bash
-   cargo xtask bundle-kde
-   ```
-   *This command compiles the Rust C-ABI core and the KDE Plasma C++ QML Plugin.*
-
-3. **Build the Engine**
-   ```bash
-   cargo build --release
-   ```
-
-## 🎮 Usage
-Running Nativis is extremely simple. Just pass the path to your media file:
-
-```bash
-./target/release/nativis /path/to/your/wallpaper.jpg
+```text
+local image/video file
+        |
+media backend (image or FFmpeg video)
+        |
+Nativis runtime
+        |
+POSIX shared memory: /nativis_shm
+        |
+KDE Plasma QML/OpenGL wallpaper plugin
 ```
 
-**Note on System Installation (KDE Plasma):** 
-The very first time you run Nativis, it will detect if its native renderer plugin is installed in your system Qt directory (`/usr/lib/x86_64-linux-gnu/qt5/qml/org/nativis`). If it's missing, Nativis will prompt you for your `sudo` password to copy the plugin to the system path. This only happens **once**.
+The command-line binary enforces a single running instance on Unix using `/tmp/nativis.sock`.
 
-To exit Nativis and pause the engine, simply press `Ctrl+C` in the terminal.
+## 🛠️ Requirements
+
+Building the current KDE/X11 integration requires:
+
+- Rust stable toolchain and Cargo
+- CMake 3.16 or newer, a C++17 compiler, and `make`
+- Qt 5 development components: Core, Gui, Qml, Quick, and OpenGL
+- KDE Plasma 5 development/runtime tools, including `kpackagetool5`, `kbuildsycoca5`, and `qdbus`
+- FFmpeg development libraries discoverable by `pkg-config` (for `ffmpeg-next`)
+
+The automatic installer currently uses Debian/Ubuntu-style Plasma 5 locations and installs the system QML module under `/usr/lib/x86_64-linux-gnu/qt5/qml/org/nativis`. It may need changes on other distributions or architectures.
+
+## 📦 Build from Source
+
+Clone the repository and build the KDE bundle first:
+
+```bash
+git clone https://github.com/ExiroStudio/nativis.git
+cd nativis
+cargo xtask bundle-kde
+```
+
+`bundle-kde` builds the Rust C ABI library and the Qt/QML plugin, then assembles the Plasma wallpaper package in `platforms/kde-x11`.
+
+Build the executable:
+
+```bash
+cargo build --release
+```
+
+For development, omit `--release` in the last command. Re-run `cargo xtask bundle-kde` whenever the KDE plugin or its Rust C ABI changes.
+
+## 🎮 Run
+
+Start Nativis with a local media path:
+
+```bash
+./target/release/nativis /absolute/path/to/wallpaper.mp4
+```
+
+On startup, the KDE platform bootstrap installs or refreshes the Plasma wallpaper package. Installing the Qt QML module may prompt for `sudo`, because that module is copied to a system Qt directory. Plasma is then asked to switch desktops to the `com.nativis.wallpaper` wallpaper plugin.
+
+To force the platform bundle to be installed again:
+
+```bash
+./target/release/nativis --reinstall-platform
+```
+
+Use `Ctrl+C` to stop the engine. If a stale process still owns the single-instance socket, terminate that process before starting another instance.
+
+## 🗂️ Repository Layout
+
+| Path | Purpose |
+| --- | --- |
+| `src/main.rs` | CLI entry point and built-in backend registration |
+| `nativis-core/` | Core contracts, runtime, asset handling, protocol, resources, and shared-memory transport |
+| `plugins/` | Image and FFmpeg video media backends |
+| `nativis-platform/kde-x11/` | KDE X11 platform bootstrap plus the Rust and Qt/QML plugin sources |
+| `platforms/kde-x11/` | Assembled KDE Plasma wallpaper bundle |
+| `xtask/` | `cargo xtask bundle-kde` build/packaging task |
+
+## ⚠️ Known Limitations
+
+- Only local file paths are supported; network URIs are not supported.
+- Only the KDE Plasma 5/X11 path is implemented.
+- The shared-memory sink is allocated for a maximum 3840×2160 RGBA frame plus protocol overhead.
+- Platform installation is distribution- and architecture-specific at present.
+- There is no supported command to select a different wallpaper or restore the previous one; KDE's wallpaper settings can be used after stopping Nativis.
 
 ## 📄 License
-This project is licensed under the MIT OR Apache-2.0 License.
+
+This project is licensed under the [Apache License 2.0](LICENSE).
