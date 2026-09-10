@@ -1,15 +1,22 @@
 <div align="center">
   <h1>🌌 Nativis</h1>
-  <p><b>High-Performance Native Live Wallpaper Engine built with Rust</b></p>
+  <p><b>High-Performance Cross-Platform Live Wallpaper Engine built with Rust</b></p>
 </div>
 
-Nativis is a blazingly fast, multi-process multimedia wallpaper engine designed to integrate deeply with your desktop environment. It bypasses traditional overlay windows by pushing pixel data directly into the compositor's native rendering pipeline using POSIX Shared Memory (SHM).
+Nativis is a blazingly fast, multi-process multimedia wallpaper engine designed for native integration across operating systems and desktop environments. Its core, media backends, and frame protocol are platform-agnostic; each platform supplies its own desktop integration. The current implementation starts with KDE Plasma, while the architecture is designed to grow beyond any single OS or DE.
 
 ## ✨ Features
 - **Zero-Copy Rendering Overhead**: Uses POSIX Shared Memory (SHM) to transport high-resolution frames (e.g., 4K textures) across processes seamlessly.
 - **Native Desktop Integration**: Injects directly into the host shell (e.g., `plasmashell`) rather than drawing a fake window behind your desktop icons.
 - **Robust Architecture**: Built in Rust for memory safety, utilizing a modular plugin system for multimedia backends.
+- **Cross-Platform Foundation**: Keeps media backends, runtime, frame protocol, and platform integration separate so native adapters can be added for other operating systems and desktop environments.
 - **Single-Instance Guard**: Built-in IPC sockets prevent resource conflicts and memory tearing.
+
+## 💎 What Makes Nativis Different?
+- **Native Instead of a Fake Desktop Window**: Nativis uses the host desktop's native wallpaper layer rather than a borderless window workaround. KDE Plasma is the first implemented adapter for this approach.
+- **Frame Protocol Built for More Than One Format**: The shared-memory protocol carries RGBA image frames and multi-plane NV12 video frames today, while keeping room for formats such as P010 in the future.
+- **Media Backends Stay Decoupled from the Desktop**: Image and video backends only produce frames; the runtime, transport, and KDE consumer stay separate. This makes new input sources possible without coupling them to the desktop implementation.
+- **4K-Friendly Data Path**: Video frames remain in NV12 through the runtime and shared-memory transport, reducing the amount of pixel data moved compared with a full RGBA video path.
 
 ## 🎞️ Media Support
 
@@ -22,8 +29,18 @@ Nativis is a blazingly fast, multi-process multimedia wallpaper engine designed 
 > [!NOTE] 
 > **Rendering Architecture:** Nativis now uses the **GPU** for parts of its rendering pipeline, including texture compositing and presentation through its WGPU/Qt OpenGL rendering paths. Media decoding and shared-memory transport still use CPU-side processing where required.
 
-## 🚀 Supported Environments
-Nativis is built to be cross-platform, but currently focuses on deep integration with Linux Desktop Environments.
+## 🗺️ What's Next?
+
+| Direction | Plan |
+|-----------|------|
+| **External Frame Sources** | Allow other applications to provide frames to Nativis through the Nativis frame protocol. Sources that use a different API or pixel format can be supported through an adapter that converts them to the common frame contract. |
+| **More Pixel Formats** | Extend the multi-plane transport beyond NV12, including P010 for 10-bit/HDR-capable workflows. |
+| **More GPU Work** | Continue moving suitable rendering and color-conversion work to GPU paths while retaining CPU fallbacks where needed. |
+| **Native Platform Adapters** | Add desktop integrations for more operating systems and desktop environments while keeping the shared core and frame protocol platform-independent. |
+| **Simpler Linux Distribution** | Package the KDE integration so installation can move toward a user-space, no-sudo, single-binary experience. |
+
+## 🚀 Platform & Desktop Support
+Nativis is designed for multiple operating systems and desktop environments. **KDE Plasma 5 on X11 is the first available native integration**; the entries marked planned describe the intended expansion of the same core architecture.
 
 | Platform / Desktop | Display Server | Support Status | Method |
 |--------------------|----------------|----------------|--------|
