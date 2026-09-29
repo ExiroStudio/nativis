@@ -1,6 +1,7 @@
 use std::ffi::CString;
 use std::os::raw::{c_int, c_void};
 use std::ptr;
+use std::time::Instant;
 
 pub struct SurfaceHandle {
     pub ptr: *mut u8,
@@ -126,7 +127,12 @@ pub struct ShmSink {
     surface: ShmSurface,
     resources: ResourceManager,
     frame_count: u64,
+    submitted_frames: u64,
+    total_submit_us: u64,
+    window_start: Instant,
 }
+
+const METRICS_INTERVAL: u64 = 300;
 
 impl ShmSink {
     pub fn new(name: &str, size: usize, resources: ResourceManager) -> Result<Self, String> {
@@ -139,12 +145,20 @@ impl ShmSink {
         // first frame would have frame_id = 0 = lastSeen → no signal ever emitted
         // on cold boot (where SHM didn't exist when the plugin first initialised).
         // Starting at 1 guarantees the first real frame always produces a signal.
-        Ok(Self { surface, resources, frame_count: 1 })
+        Ok(Self {
+            surface,
+            resources,
+            frame_count: 1,
+            submitted_frames: 0,
+            total_submit_us: 0,
+            window_start: Instant::now(),
+        })
     }
 }
 
 impl FrameSink for ShmSink {
     fn submit(&mut self, frame: Frame) -> Result<(), MediaError> {
+        let started = Instant::now();
         let handle = self.surface.acquire().map_err(|e| MediaError::GpuUpload(e))?;
         
         let mut frame_count_increment = 0;
@@ -282,8 +296,21 @@ impl FrameSink for ShmSink {
         if !success {
             return Err(MediaError::GpuUpload("Invalid resource type or handle for ShmSink".into()));
         }
+
+        self.submitted_frames += 1;
+        self.total_submit_us += started.elapsed().as_micros() as u64;
+        if self.submitted_frames % METRICS_INTERVAL == 0 {
+            let elapsed_s = self.window_start.elapsed().as_secs_f64().max(0.001);
+            tracing::info!(
+                "[NATIVIS SHM] submit_fps={:.1} avg_submit_us={}µs",
+                self.submitted_frames as f64 / elapsed_s,
+                self.total_submit_us / self.submitted_frames,
+            );
+            self.submitted_frames = 0;
+            self.total_submit_us = 0;
+            self.window_start = Instant::now();
+        }
         
         Ok(())
     }
 }
-

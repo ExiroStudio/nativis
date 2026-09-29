@@ -14,11 +14,17 @@ static CAPABILITIES: &[MediaCapability] = &[MediaCapability::Alpha];
 /// Media backend for loading static image files into CPU buffers.
 pub struct ImageBackend {
     frame: Option<Frame>,
+    pending: Option<Frame>,
+    emit_on_next_update: bool,
 }
 
 impl ImageBackend {
     pub fn new() -> Self {
-        Self { frame: None }
+        Self {
+            frame: None,
+            pending: None,
+            emit_on_next_update: false,
+        }
     }
 }
 
@@ -68,6 +74,7 @@ impl MediaBackend for ImageBackend {
             pts: Duration::ZERO,
             is_opaque: !has_alpha,
         });
+        self.emit_on_next_update = true;
 
         info!(
             "ImageBackend successfully opened '{}' ({}x{}, alpha={})",
@@ -81,11 +88,17 @@ impl MediaBackend for ImageBackend {
     }
 
     fn update(&mut self, _dt: Duration) -> Result<(), MediaError> {
+        self.pending = if self.emit_on_next_update {
+            self.emit_on_next_update = false;
+            self.frame.clone()
+        } else {
+            None
+        };
         Ok(())
     }
 
     fn current_frame(&self) -> FrameStatus {
-        if let Some(ref frame) = self.frame {
+        if let Some(ref frame) = self.pending {
             FrameStatus::Ready(frame.clone())
         } else {
             FrameStatus::Unchanged
@@ -103,5 +116,35 @@ impl MediaBackend for ImageBackend {
 
     fn close(&mut self) {
         self.frame = None;
+        self.pending = None;
+        self.emit_on_next_update = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nativis_core::contract::ResourceHandle;
+
+    #[test]
+    fn emits_a_static_frame_once() {
+        let frame = Frame {
+            resource: ResourceHandle(1),
+            width: 1,
+            height: 1,
+            pts: Duration::ZERO,
+            is_opaque: true,
+        };
+        let mut backend = ImageBackend {
+            frame: Some(frame),
+            pending: None,
+            emit_on_next_update: true,
+        };
+
+        backend.update(Duration::ZERO).unwrap();
+        assert!(matches!(backend.current_frame(), FrameStatus::Ready(_)));
+
+        backend.update(Duration::ZERO).unwrap();
+        assert!(matches!(backend.current_frame(), FrameStatus::Unchanged));
     }
 }
