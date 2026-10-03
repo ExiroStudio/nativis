@@ -1,0 +1,932 @@
+import { Button, ScrollView, Slider, CheckBox, LineEdit, ComboBox } from "std-widgets.slint";
+
+export struct WallpaperData {
+    name: string,
+    path: string,
+    media_type: string, // "video" or "image"
+    meta: string,
+    size: string,
+    is_active: bool,
+}
+
+export struct PluginData {
+    id: string,
+    name: string,
+    category: string,
+    description: string,
+    status: string, // "active", "installed", "available"
+    badge: string,
+}
+
+export component AppWindow inherits Window {
+    title: "Nativis - Modern Live Wallpaper Engine";
+    preferred-width: 740px;
+    preferred-height: 480px;
+    min-width: 620px;
+    min-height: 400px;
+    background: #0b0f17;
+
+    // Callbacks to Rust backend
+    callback apply_wallpaper(string);
+    callback toggle_pause();
+    callback change_speed(float);
+    callback install_plugin(string);
+    callback add_custom_wallpaper();
+
+    // State properties
+    in-out property <int> active-tab: 0; // 0 = Wallpapers, 1 = Plugins
+    in-out property <bool> engine-running: true;
+    in-out property <string> engine-status-text: "Engine Online (60 FPS)";
+    in-out property <string> active-sink-name: "KDE Native QML (SHM)";
+    in-out property <string> detected-de: "KDE Plasma (X11)";
+    in-out property <string> detected-os: "Linux x86_64";
+    in-out property <string> search-query: "";
+    in-out property <string> filter-type: "all"; // "all", "video", "image"
+
+    // Active / Selected item state
+    in-out property <string> selected-name: "arlenchino.mp4";
+    in-out property <string> selected-meta: "1080p 60fps • NV12 Hardware Decode";
+    in-out property <string> selected-size: "15.2 MB";
+    in-out property <string> selected-type: "video";
+    in-out property <float> playback-speed: 1.0;
+
+    // Data models
+    in-out property <[WallpaperData]> wallpapers: [
+        { name: "arlenchino.mp4", path: "arlenchino.mp4", media_type: "video", meta: "1080p 60fps (NV12)", size: "15.2 MB", is_active: true },
+        { name: "video4k.mp4", path: "video4k.mp4", media_type: "video", meta: "3840x2160 (4K NV12)", size: "23.1 MB", is_active: false },
+        { name: "CuteBunny.jpg", path: "CuteBunny.jpg", media_type: "image", meta: "1920x1080 (RGBA)", size: "796 KB", is_active: false },
+        { name: "arona.mp4", path: "arona.mp4", media_type: "video", meta: "1080p 60fps (NV12)", size: "33.0 MB", is_active: false },
+        { name: "WallpaperSunna.jpg", path: "WallpaperSunna.jpg", media_type: "image", meta: "3840x2160 (RGBA)", size: "971 KB", is_active: false },
+        { name: "remielle.mp4", path: "remielle.mp4", media_type: "video", meta: "1080p 60fps (NV12)", size: "19.4 MB", is_active: false },
+        { name: "1080.mp4", path: "1080.mp4", media_type: "video", meta: "1920x1080 60fps", size: "33.4 MB", is_active: false },
+    ];
+
+    in-out property <[PluginData]> platform-plugins: [
+        { id: "platform-kde", name: "KDE Plasma Native Adapter", category: "platform", description: "Direct in-process QML injection ke plasmashell via POSIX Shared Memory", status: "active", badge: "KDE X11/Wayland" },
+        { id: "platform-wayland", name: "Wayland Layer-Shell Adapter", category: "platform", description: "Render ke zwlr_layer_shell_v1 background layer (Hyprland, Sway, Wayfire)", status: "available", badge: "wlroots" },
+        { id: "platform-x11", name: "X11 Root Window Adapter", category: "platform", description: "Suntikkan wallpaper canvas ke X11 Root Window (XFCE, i3, bspwm, Cinnamon)", status: "available", badge: "X11 Universal" },
+        { id: "platform-windows", name: "Windows WorkerW Adapter", category: "platform", description: "Injeksi wallpaper ke handle WorkerW di belakang icon desktop Windows 10/11", status: "standby", badge: "Windows DWM" },
+        { id: "platform-macos", name: "macOS Desktop Window Adapter", category: "platform", description: "NSWindow desktop-level wallpaper surface untuk macOS", status: "standby", badge: "macOS Cocoa" },
+    ];
+
+    in-out property <[PluginData]> media-plugins: [
+        { id: "media-video", name: "FFmpeg Hardware Video Backend", category: "media", description: "Hardware decoding video 4K MP4/WebM ke format planar NV12 ultra-efisien", status: "active", badge: "Built-in" },
+        { id: "media-image", name: "Static Image Backend", category: "media", description: "High-speed zero-copy decoder untuk gambar JPG, PNG, WEBP, AVIF", status: "active", badge: "Built-in" },
+        { id: "media-web", name: "HTML5 & Webview Wallpaper", category: "media", description: "Jalankan wallpaper interaktif berbasis Web (HTML, CSS3, Three.js, Canvas)", status: "available", badge: "Webkit" },
+        { id: "media-shader", name: "GLSL / ShaderToy Live Shaders", category: "media", description: "Render live shaders real-time via WGPU tanpa memerlukan file video", status: "available", badge: "WGSL/WGPU" },
+        { id: "media-audio-viz", name: "PipeWire Audio Visualizer", category: "media", description: "Visualisasi spektrum audio real-time reaktif terhadap musik dari sistem", status: "available", badge: "PipeWire" },
+    ];
+
+    VerticalLayout {
+        padding: 0px;
+        spacing: 0px;
+
+        // ==================== TOP NAVIGATION BAR ====================
+        Rectangle {
+            height: 44px;
+            background: #111827;
+            border-width: 1px;
+            border-color: #1f2937;
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                alignment: space-between;
+
+                // Logo & App Name
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    
+                    Rectangle {
+                        width: 26px;
+                        height: 26px;
+                        border-radius: 6px;
+                        background: #4f46e5;
+                        y: 9px;
+                        Text {
+                            text: "🌌";
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 1px;
+                        HorizontalLayout {
+                            spacing: 5px;
+                            Text {
+                                text: "Nativis";
+                                font-size: 13px;
+                                font-weight: 800;
+                                color: #f8fafc;
+                            }
+                            Rectangle {
+                                border-radius: 3px;
+                                background: #312e81;
+                                border-width: 1px;
+                                border-color: #4f46e5;
+                                height: 14px;
+                                width: 44px;
+                                y: 1px;
+                                Text {
+                                    text: "MODERN";
+                                    font-size: 8px;
+                                    font-weight: 700;
+                                    color: #a5b4fc;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                        Text {
+                            text: "Lightweight Wallpaper Engine";
+                            font-size: 9px;
+                            color: #64748b;
+                        }
+                    }
+                }
+
+                // Center Navigation Tabs
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 6px;
+
+                    // Tab 1: Wallpapers
+                    Rectangle {
+                        width: 120px;
+                        height: 28px;
+                        border-radius: 6px;
+                        background: active-tab == 0 ? #4f46e5 : #1e293b;
+                        border-width: 1px;
+                        border-color: active-tab == 0 ? #6366f1 : #334155;
+                        y: 8px;
+
+                        TouchArea {
+                            clicked => { active-tab = 0; }
+                        }
+
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: 6px;
+                            Text {
+                                text: "🖼️";
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: "Wallpaper Hub";
+                                font-size: 11px;
+                                font-weight: 700;
+                                color: active-tab == 0 ? #ffffff : #94a3b8;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    // Tab 2: Plugins & Compatibility
+                    Rectangle {
+                        width: 155px;
+                        height: 28px;
+                        border-radius: 6px;
+                        background: active-tab == 1 ? #4f46e5 : #1e293b;
+                        border-width: 1px;
+                        border-color: active-tab == 1 ? #6366f1 : #334155;
+                        y: 8px;
+
+                        TouchArea {
+                            clicked => { active-tab = 1; }
+                        }
+
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: 6px;
+                            Text {
+                                text: "🧩";
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: "Plugins & Compatibility";
+                                font-size: 11px;
+                                font-weight: 700;
+                                color: active-tab == 1 ? #ffffff : #94a3b8;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                // Right Engine Status & Pause Button
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+
+                    Rectangle {
+                        height: 24px;
+                        border-radius: 12px;
+                        background: #0f172a;
+                        border-width: 1px;
+                        border-color: #1e293b;
+                        y: 10px;
+
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            spacing: 6px;
+                            alignment: center;
+                            Rectangle {
+                                width: 6px;
+                                height: 6px;
+                                border-radius: 3px;
+                                background: engine-running ? #10b981 : #f59e0b;
+                                y: 9px;
+                            }
+                            Text {
+                                text: engine-running ? "Engine Online • 60 FPS" : "Engine Paused";
+                                font-size: 9px;
+                                font-weight: 600;
+                                color: engine-running ? #34d399 : #fbbf24;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: 70px;
+                        height: 24px;
+                        border-radius: 6px;
+                        background: engine-running ? #064e3b : #78350f;
+                        border-width: 1px;
+                        border-color: engine-running ? #059669 : #d97706;
+                        y: 10px;
+
+                        TouchArea {
+                            clicked => {
+                                toggle_pause();
+                            }
+                        }
+
+                        Text {
+                            text: engine-running ? "⏸️ Jeda" : "▶️ Lanjut";
+                            font-size: 10px;
+                            font-weight: 700;
+                            color: #ffffff;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ==================== CONTENT VIEW ====================
+        if active-tab == 0 : HorizontalLayout {
+            // LEFT: WALLPAPERS GALLERY
+            VerticalLayout {
+                horizontal-stretch: 3;
+                padding: 10px;
+                spacing: 8px;
+
+                // Toolbar
+                Rectangle {
+                    height: 34px;
+                    border-radius: 6px;
+                    background: #161f2e;
+                    border-width: 1px;
+                    border-color: #243044;
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        alignment: space-between;
+
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: start;
+
+                            Text {
+                                text: "Koleksi:";
+                                font-size: 11px;
+                                font-weight: 700;
+                                color: #cbd5e1;
+                                vertical-alignment: center;
+                            }
+
+                            // Filter: Semua
+                            Rectangle {
+                                width: 50px;
+                                height: 22px;
+                                border-radius: 4px;
+                                background: filter-type == "all" ? #4f46e5 : #1e293b;
+                                y: 6px;
+                                TouchArea { clicked => { filter-type = "all"; } }
+                                Text {
+                                    text: "Semua";
+                                    font-size: 9px;
+                                    font-weight: 600;
+                                    color: #ffffff;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            // Filter: Video
+                            Rectangle {
+                                width: 55px;
+                                height: 22px;
+                                border-radius: 4px;
+                                background: filter-type == "video" ? #4f46e5 : #1e293b;
+                                y: 6px;
+                                TouchArea { clicked => { filter-type = "video"; } }
+                                Text {
+                                    text: "🎬 Video";
+                                    font-size: 9px;
+                                    font-weight: 600;
+                                    color: #ffffff;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            // Filter: Gambar
+                            Rectangle {
+                                width: 60px;
+                                height: 22px;
+                                border-radius: 4px;
+                                background: filter-type == "image" ? #4f46e5 : #1e293b;
+                                y: 6px;
+                                TouchArea { clicked => { filter-type = "image"; } }
+                                Text {
+                                    text: "🖼️ Gambar";
+                                    font-size: 9px;
+                                    font-weight: 600;
+                                    color: #ffffff;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        // Right: Add Local Media
+                        Rectangle {
+                            width: 110px;
+                            height: 22px;
+                            border-radius: 4px;
+                            background: #4f46e5;
+                            y: 6px;
+
+                            TouchArea {
+                                clicked => { add_custom_wallpaper(); }
+                            }
+
+                            Text {
+                                text: "➕ Tambah Media";
+                                font-size: 9px;
+                                font-weight: 700;
+                                color: #ffffff;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                // Wallpaper List
+                ScrollView {
+                    VerticalLayout {
+                        spacing: 6px;
+
+                        for wp in wallpapers: Rectangle {
+                            height: 48px;
+                            border-radius: 8px;
+                            background: wp.name == selected-name ? #1e293b : #161f2e;
+                            border-width: wp.is-active ? 2px : 1px;
+                            border-color: wp.is-active ? #10b981 : (wp.name == selected-name ? #6366f1 : #243044);
+
+                            TouchArea {
+                                clicked => {
+                                    selected-name = wp.name;
+                                    selected-meta = wp.meta;
+                                    selected-size = wp.size;
+                                    selected-type = wp.media-type;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                alignment: space-between;
+
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    alignment: start;
+
+                                    // Thumbnail / Icon
+                                    Rectangle {
+                                        width: 32px;
+                                        height: 32px;
+                                        border-radius: 6px;
+                                        background: wp.media-type == "video" ? #1e1b4b : #3f1d24;
+                                        border-width: 1px;
+                                        border-color: wp.media-type == "video" ? #4338ca : #9f1239;
+                                        y: 8px;
+                                        Text {
+                                            text: wp.media-type == "video" ? "🎬" : "🖼️";
+                                            font-size: 15px;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    // Details
+                                    VerticalLayout {
+                                        alignment: center;
+                                        spacing: 2px;
+
+                                        HorizontalLayout {
+                                            spacing: 6px;
+                                            Text {
+                                                text: wp.name;
+                                                font-size: 11px;
+                                                font-weight: 700;
+                                                color: #f1f5f9;
+                                            }
+                                            if wp.is-active : Rectangle {
+                                                width: 74px;
+                                                height: 15px;
+                                                border-radius: 3px;
+                                                background: #064e3b;
+                                                border-width: 1px;
+                                                border-color: #059669;
+                                                y: 1px;
+                                                Text {
+                                                    text: "SEDANG AKTIF";
+                                                    font-size: 7px;
+                                                    font-weight: 800;
+                                                    color: #34d399;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                        }
+
+                                        HorizontalLayout {
+                                            spacing: 6px;
+                                            Text {
+                                                text: wp.meta;
+                                                font-size: 9px;
+                                                color: #94a3b8;
+                                            }
+                                            Text {
+                                                text: "• " + wp.size;
+                                                font-size: 9px;
+                                                color: #64748b;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Apply Button
+                                HorizontalLayout {
+                                    alignment: end;
+                                    y: 12px;
+                                    
+                                    Rectangle {
+                                        width: 74px;
+                                        height: 24px;
+                                        border-radius: 5px;
+                                        background: wp.is-active ? #064e3b : #4f46e5;
+                                        border-width: 1px;
+                                        border-color: wp.is-active ? #10b981 : #6366f1;
+
+                                        TouchArea {
+                                            clicked => {
+                                                selected-name = wp.name;
+                                                selected-meta = wp.meta;
+                                                selected-size = wp.size;
+                                                selected-type = wp.media-type;
+                                                apply_wallpaper(wp.path);
+                                            }
+                                        }
+
+                                        Text {
+                                            text: wp.is-active ? "✓ Aktif" : "Terapkan";
+                                            font-size: 10px;
+                                            font-weight: 700;
+                                            color: #ffffff;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // RIGHT: DETAIL INSPECTOR & CONFIG
+            Rectangle {
+                horizontal-stretch: 1;
+                min-width: 200px;
+                max-width: 225px;
+                background: #111827;
+                border-width: 1px;
+                border-color: #1f2937;
+
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 10px;
+
+                    Text {
+                        text: "DETAIL & PENGATURAN";
+                        font-size: 9px;
+                        font-weight: 800;
+                        color: #64748b;
+                    }
+
+                    // Selected preview box
+                    Rectangle {
+                        height: 70px;
+                        border-radius: 8px;
+                        background: #0f172a;
+                        border-width: 1px;
+                        border-color: #334155;
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 3px;
+                            Text {
+                                text: selected-type == "video" ? "🎬" : "🖼️";
+                                font-size: 20px;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: selected-name;
+                                font-size: 10px;
+                                font-weight: 700;
+                                color: #f8fafc;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: selected-meta;
+                                font-size: 8px;
+                                color: #94a3b8;
+                                horizontal-alignment: center;
+                            }
+                        }
+                    }
+
+                    // Sliders
+                    VerticalLayout {
+                        spacing: 6px;
+
+                        Text {
+                            text: "Kecepatan: " + playback-speed + "x";
+                            font-size: 9px;
+                            font-weight: 600;
+                            color: #cbd5e1;
+                        }
+
+                        Slider {
+                            minimum: 0.25;
+                            maximum: 2.0;
+                            value: playback-speed;
+                            changed(val) => {
+                                playback-speed = val;
+                                change_speed(val);
+                            }
+                        }
+
+                        Text {
+                            text: "Mode Tampilan:";
+                            font-size: 9px;
+                            font-weight: 600;
+                            color: #cbd5e1;
+                        }
+
+                        ComboBox {
+                            model: ["Fill / Potong Proporsional", "Fit / Pas Layar", "Stretch / Tarik Penuh", "Center / Ukuran Asli"];
+                            current-index: 0;
+                        }
+
+                        CheckBox {
+                            text: "Jeda saat fullscreen";
+                            checked: true;
+                        }
+
+                        CheckBox {
+                            text: "Jeda saat hemat daya";
+                            checked: true;
+                        }
+
+                        CheckBox {
+                            text: "Hardware HW Decode";
+                            checked: true;
+                        }
+                    }
+
+                    // Apply Button
+                    Rectangle {
+                        height: 28px;
+                        border-radius: 6px;
+                        background: #4f46e5;
+                        TouchArea {
+                            clicked => {
+                                apply_wallpaper(selected-name);
+                            }
+                        }
+                        Text {
+                            text: "Terapkan ke Desktop";
+                            font-size: 10px;
+                            font-weight: 700;
+                            color: #ffffff;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ==================== TAB 2: PLUGINS & COMPATIBILITY ====================
+        if active-tab == 1 : ScrollView {
+            VerticalLayout {
+                padding: 12px;
+                spacing: 12px;
+
+                // Diagnostics Box
+                Rectangle {
+                    height: 56px;
+                    border-radius: 8px;
+                    background: #131c2d;
+                    border-width: 1px;
+                    border-color: #2b3952;
+                    VerticalLayout {
+                        padding: 8px;
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 4px;
+
+                        HorizontalLayout {
+                            alignment: space-between;
+                            Text {
+                                text: "💻 Deteksi Lingkungan Host (Environment Diagnostics)";
+                                font-size: 11px;
+                                font-weight: 700;
+                                color: #f8fafc;
+                            }
+                            Rectangle {
+                                width: 120px;
+                                height: 18px;
+                                border-radius: 9px;
+                                background: #064e3b;
+                                border-width: 1px;
+                                border-color: #10b981;
+                                Text {
+                                    text: "✓ Kompatibel";
+                                    font-size: 9px;
+                                    font-weight: 700;
+                                    color: #34d399;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            alignment: space-between;
+                            Text {
+                                text: "• OS: " + detected-os + "  • DE: " + detected-de + "  • Sink: " + active-sink-name;
+                                font-size: 9px;
+                                color: #94a3b8;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                // Section 1: Platform & DE Adapters
+                VerticalLayout {
+                    spacing: 5px;
+                    Text {
+                        text: "1. PLATFORM & DESKTOP ENVIRONMENT ADAPTERS";
+                        font-size: 10px;
+                        font-weight: 800;
+                        color: #94a3b8;
+                    }
+                    Text {
+                        text: "Menyediakan kompatibilitas desktop shell untuk menyuntikkan wallpaper tanpa jendela palsu.";
+                        font-size: 9px;
+                        color: #64748b;
+                    }
+
+                    for plg in platform-plugins: Rectangle {
+                        height: 46px;
+                        border-radius: 6px;
+                        background: #161f2e;
+                        border-width: 1px;
+                        border-color: plg.status == "active" ? #10b981 : #243044;
+
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            alignment: space-between;
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Text {
+                                        text: plg.name;
+                                        font-size: 11px;
+                                        font-weight: 700;
+                                        color: #ffffff;
+                                    }
+                                    Rectangle {
+                                        width: 80px;
+                                        height: 14px;
+                                        border-radius: 3px;
+                                        background: #1e293b;
+                                        Text {
+                                            text: plg.badge;
+                                            font-size: 8px;
+                                            color: #94a3b8;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                                Text {
+                                    text: plg.description;
+                                    font-size: 9px;
+                                    color: #94a3b8;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                alignment: end;
+                                y: 11px;
+                                if plg.status == "active" : Rectangle {
+                                    width: 78px;
+                                    height: 24px;
+                                    border-radius: 5px;
+                                    background: #064e3b;
+                                    border-width: 1px;
+                                    border-color: #10b981;
+                                    Text {
+                                        text: "✓ Aktif (KDE)";
+                                        font-size: 9px;
+                                        font-weight: 700;
+                                        color: #34d399;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                if plg.status == "available" : Rectangle {
+                                    width: 78px;
+                                    height: 24px;
+                                    border-radius: 5px;
+                                    background: #312e81;
+                                    border-width: 1px;
+                                    border-color: #4f46e5;
+                                    TouchArea {
+                                        clicked => { install_plugin(plg.name); }
+                                    }
+                                    Text {
+                                        text: "Pasang";
+                                        font-size: 9px;
+                                        font-weight: 700;
+                                        color: #ffffff;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                if plg.status == "standby" : Rectangle {
+                                    width: 78px;
+                                    height: 24px;
+                                    border-radius: 5px;
+                                    background: #1e293b;
+                                    Text {
+                                        text: "Roadmap";
+                                        font-size: 9px;
+                                        color: #64748b;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Section 2: Media Source Backends
+                VerticalLayout {
+                    spacing: 5px;
+                    Text {
+                        text: "2. MEDIA SOURCE & CONTENT BACKENDS";
+                        font-size: 10px;
+                        font-weight: 800;
+                        color: #94a3b8;
+                    }
+                    Text {
+                        text: "Memungkinkan Nativis menampilkan format baru (Video FFmpeg, Gambar, HTML5 Web, Shader, Visualizer).";
+                        font-size: 9px;
+                        color: #64748b;
+                    }
+
+                    for plg in media-plugins: Rectangle {
+                        height: 46px;
+                        border-radius: 6px;
+                        background: #161f2e;
+                        border-width: 1px;
+                        border-color: plg.status == "active" ? #10b981 : #243044;
+
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            alignment: space-between;
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Text {
+                                        text: plg.name;
+                                        font-size: 11px;
+                                        font-weight: 700;
+                                        color: #ffffff;
+                                    }
+                                    Rectangle {
+                                        width: 70px;
+                                        height: 14px;
+                                        border-radius: 3px;
+                                        background: #1e293b;
+                                        Text {
+                                            text: plg.badge;
+                                            font-size: 8px;
+                                            color: #94a3b8;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                                Text {
+                                    text: plg.description;
+                                    font-size: 9px;
+                                    color: #94a3b8;
+                                }
+                            }
+
+                            HorizontalLayout {
+                                alignment: end;
+                                y: 11px;
+                                if plg.status == "active" : Rectangle {
+                                    width: 78px;
+                                    height: 24px;
+                                    border-radius: 5px;
+                                    background: #064e3b;
+                                    border-width: 1px;
+                                    border-color: #10b981;
+                                    Text {
+                                        text: "✓ Built-in";
+                                        font-size: 9px;
+                                        font-weight: 700;
+                                        color: #34d399;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                if plg.status == "available" : Rectangle {
+                                    width: 78px;
+                                    height: 24px;
+                                    border-radius: 5px;
+                                    background: #312e81;
+                                    border-width: 1px;
+                                    border-color: #4f46e5;
+                                    TouchArea {
+                                        clicked => { install_plugin(plg.name); }
+                                    }
+                                    Text {
+                                        text: "Pasang";
+                                        font-size: 9px;
+                                        font-weight: 700;
+                                        color: #ffffff;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+            }
+        }
+    }
+}

@@ -19,4 +19,4 @@
 
 pub mod conductor;
 
-pub use conductor::{Runtime, RuntimeConfig};
+pub use conductor::{Runtime, RuntimeConfig, RuntimeCommand};

@@ -12,6 +12,8 @@ members = [
     "nativis-core/transport-shm",
     "nativis-core/runtime",
     "nativis-core/event",
+    "nativis-core/ipc",
+    "nativis-ui",
 
     # Plugins
     "plugins/image_backend",
@@ -60,6 +62,10 @@ pollster = "0.3"
 parking_lot        = "0.12"
 crossbeam-channel  = "0.5"
 
+# GUI
+slint              = "1.18"
+slint-build        = "1.18"
+
 # ── Internal crates ──────────────────────────────────────────────────────────
 nativis-core     = { path = "nativis-core/core" }
 nativis-asset    = { path = "nativis-core/asset" }
@@ -69,6 +75,8 @@ nativis-plugin   = { path = "nativis-core/plugin" }
 nativis-runtime  = { path = "nativis-core/runtime" }
 nativis-protocol = { path = "nativis-core/protocol" }
 nativis-transport-shm = { path = "nativis-core/transport-shm" }
+nativis-ipc      = { path = "nativis-core/ipc" }
+nativis-ui       = { path = "nativis-ui" }
 nativis-plugin-image = { path = "plugins/image_backend" }
 nativis-plugin-video = { path = "plugins/video_backend" }
 nativis-platform-kde = { path = "nativis-platform/kde-x11/platform" }
@@ -83,11 +91,16 @@ edition.workspace = true
 tracing-subscriber   = { workspace = true }
 tracing              = { workspace = true }
 anyhow               = { workspace = true }
+crossbeam-channel    = { workspace = true }
+parking_lot          = { workspace = true }
+serde_json           = { workspace = true }
 
 nativis-core          = { workspace = true }
 nativis-plugin        = { workspace = true }
 nativis-runtime       = { workspace = true }
 nativis-asset         = { workspace = true }
+nativis-ipc           = { workspace = true }
+nativis-ui            = { workspace = true }
 nativis-plugin-image  = { workspace = true }
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
