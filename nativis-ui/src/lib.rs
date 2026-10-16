@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::Result;
 use tracing::{info, warn};
 use slint::{Model, ModelRc, VecModel};
-use nativis_ipc::{IpcCommand, detect_environment, is_daemon_running, send_command};
+use nativis_ipc::{IpcCommand, UserConfig, detect_environment, is_daemon_running, send_command};
 
 /// Main entry point to launch the Nativis Modern UI.
 pub fn run_ui() -> Result<()> {
@@ -12,31 +12,39 @@ pub fn run_ui() -> Result<()> {
 
     let app = AppWindow::new()?;
 
-    // 1. Detect and populate Host Environment Diagnostics
+    // 1. Load user configuration
+    let config = UserConfig::load();
+    app.set_playback_speed(config.playback_speed);
+    app.set_selected_name(config.active_wallpaper.clone().into());
+
+    // 2. Detect and populate Host Environment Diagnostics
     let env_info = detect_environment();
     app.set_detected_os(env_info.os_release.into());
     app.set_detected_de(format!("{} ({})", env_info.desktop_environment, env_info.display_server).into());
     app.set_active_sink_name(env_info.active_sink_name.into());
 
-    // 2. Discover local wallpapers in current directory / common directories
+    // 3. Discover local wallpapers in current directory / common directories
     let discovered_wallpapers = scan_wallpapers();
     if !discovered_wallpapers.is_empty() {
+        let active_wp = config.active_wallpaper.clone();
         let models: Vec<WallpaperData> = discovered_wallpapers
             .into_iter()
-            .enumerate()
-            .map(|(idx, item)| WallpaperData {
-                name: item.name.into(),
-                path: item.path.into(),
-                media_type: item.media_type.into(),
-                meta: item.meta.into(),
-                size: item.size.into(),
-                is_active: idx == 0, // First item is initially active
+            .map(|item| {
+                let is_active = item.name == active_wp || item.path == active_wp;
+                WallpaperData {
+                    name: item.name.into(),
+                    path: item.path.into(),
+                    media_type: item.media_type.into(),
+                    meta: item.meta.into(),
+                    size: item.size.into(),
+                    is_active,
+                }
             })
             .collect();
         app.set_wallpapers(ModelRc::new(VecModel::from(models)));
     }
 
-    // 3. Check if daemon is active
+    // 4. Check if daemon is active
     let daemon_up = is_daemon_running();
     app.set_engine_running(daemon_up);
     app.set_engine_status_text(if daemon_up {
@@ -45,11 +53,18 @@ pub fn run_ui() -> Result<()> {
         "Engine Standby (Click Apply to Start)".into()
     });
 
-    // 4. Connect Callbacks
+    // 5. Connect Callbacks
     let app_weak = app.as_weak();
     app.on_apply_wallpaper(move |target_path| {
         info!("UI requested to apply wallpaper: {}", target_path);
         let path_str = target_path.to_string();
+
+        // Persist to user config
+        let mut cfg = UserConfig::load();
+        cfg.active_wallpaper = path_str.clone();
+        if let Err(e) = cfg.save() {
+            warn!("Failed to save config: {}", e);
+        }
 
         // Send IPC command to background daemon
         let cmd = IpcCommand::SetWallpaper {
@@ -100,6 +115,9 @@ pub fn run_ui() -> Result<()> {
 
     app.on_change_speed(move |speed| {
         info!("UI requested speed change: {}x", speed);
+        let mut cfg = UserConfig::load();
+        cfg.playback_speed = speed;
+        let _ = cfg.save();
         let _ = send_command(&IpcCommand::SetSpeed { speed });
     });
 

@@ -10,7 +10,7 @@ use nativis_core::clock::MediaClock;
 use nativis_core::resource::ResourceManager;
 use nativis_ipc::{
     detect_environment, get_socket_path, is_daemon_running, send_command, EngineStatus,
-    IpcCommand, IpcResponse,
+    IpcCommand, IpcResponse, UserConfig,
 };
 use nativis_plugin::PluginManager;
 use nativis_plugin_image::ImageBackend;
@@ -45,7 +45,7 @@ fn main() -> Result<()> {
         }
     }
 
-    // 2. CLI quick commands: status, pause, resume
+    // 2. CLI commands
     if args.len() > 1 {
         match args[1].as_str() {
             "status" => {
@@ -64,11 +64,14 @@ fn main() -> Result<()> {
                     }
                 } else {
                     let env = detect_environment();
+                    let cfg = UserConfig::load();
                     println!("🌌 Nativis (Daemon Offline)");
                     println!("  OS:           {}", env.os_release);
                     println!("  DE:           {}", env.desktop_environment);
                     println!("  Display:      {}", env.display_server);
                     println!("  Active Sink:  {}", env.active_sink_name);
+                    println!("  Saved Config: {}", UserConfig::config_path().display());
+                    println!("  Wallpaper:    {}", cfg.active_wallpaper);
                 }
                 return Ok(());
             }
@@ -86,18 +89,35 @@ fn main() -> Result<()> {
                 }
                 return Ok(());
             }
-            "--daemon" | "daemon" => {
-                let initial_wallpaper = args.get(2).map(|s| s.as_str());
-                return run_daemon(initial_wallpaper);
+            "help" | "--help" | "-h" => {
+                println!("🌌 Nativis Wallpaper Engine");
+                println!("Usage:");
+                println!("  nativis                 Launch the modern UI");
+                println!("  nativis --no-gui        Start headless daemon using saved config");
+                println!("  nativis <path/to/media> Set wallpaper directly");
+                println!("  nativis status          Show engine status");
+                println!("  nativis pause           Pause live playback");
+                println!("  nativis resume          Resume live playback");
+                println!("  nativis --help          Show this help message");
+                return Ok(());
+            }
+            "--no-gui" | "no-gui" | "--daemon" | "daemon" => {
+                let cfg = UserConfig::load();
+                let initial_wallpaper = args.get(2).map(|s| s.as_str()).unwrap_or(&cfg.active_wallpaper);
+                info!("Starting Nativis background daemon (--no-gui) with wallpaper: {}", initial_wallpaper);
+                return run_daemon(Some(initial_wallpaper));
             }
             "--ui" | "ui" => {
-                // If daemon is not running, start it in background thread
-                ensure_daemon_running(None)?;
+                let cfg = UserConfig::load();
+                ensure_daemon_running(Some(&cfg.active_wallpaper))?;
                 return nativis_ui::run_ui();
             }
             _ => {
                 let target_media = &args[1];
-                // If a path/URI was passed, check if daemon is running
+                let mut cfg = UserConfig::load();
+                cfg.active_wallpaper = target_media.clone();
+                let _ = cfg.save();
+
                 if is_daemon_running() {
                     info!("Daemon is already running. Sending SetWallpaper IPC command...");
                     match send_command(&IpcCommand::SetWallpaper {
@@ -114,16 +134,16 @@ fn main() -> Result<()> {
                         }
                     }
                 } else {
-                    // Daemon not running, run daemon with this media
                     return run_daemon(Some(target_media));
                 }
             }
         }
     }
 
-    // Default with no arguments: Launch Modern UI!
-    info!("No arguments provided. Launching Nativis Modern UI...");
-    ensure_daemon_running(Some("arlenchino.mp4"))?;
+    // Default with no arguments: Load saved user configuration and launch Modern UI!
+    let cfg = UserConfig::load();
+    info!("No arguments provided. Launching Nativis Modern UI with saved wallpaper: {}", cfg.active_wallpaper);
+    ensure_daemon_running(Some(&cfg.active_wallpaper))?;
     nativis_ui::run_ui()
 }
 
@@ -193,7 +213,6 @@ fn run_daemon(initial_wallpaper: Option<&str>) -> Result<()> {
     let mut backend = plugin_manager
         .open(&asset_path)
         .or_else(|| {
-            // Fallback to image if video not found
             let fallback = AssetPath::parse("CuteBunny.jpg").ok()?;
             plugin_manager.open(&fallback)
         })
@@ -302,6 +321,12 @@ fn handle_ipc_command(
 
             *current_wallpaper.write() = Some(uri.clone());
             let _ = command_tx.send(RuntimeCommand::SetBackend(backend));
+
+            // Persist wallpaper choice in user config
+            let mut cfg = UserConfig::load();
+            cfg.active_wallpaper = uri.clone();
+            let _ = cfg.save();
+
             IpcResponse::Ok { message: format!("Wallpaper set to {}", uri) }
         }
         IpcCommand::Pause => {
@@ -321,24 +346,38 @@ fn handle_ipc_command(
             IpcResponse::Ok { message: if next { "Paused".into() } else { "Resumed".into() } }
         }
         IpcCommand::SetSpeed { speed } => {
+            let mut cfg = UserConfig::load();
+            cfg.playback_speed = speed;
+            let _ = cfg.save();
             IpcResponse::Ok { message: format!("Speed set to {}", speed) }
         }
         IpcCommand::SetVolume { volume } => {
+            let mut cfg = UserConfig::load();
+            cfg.volume = volume;
+            let _ = cfg.save();
             IpcResponse::Ok { message: format!("Volume set to {}", volume) }
         }
         IpcCommand::GetStatus => {
             let wp = current_wallpaper.read().clone();
             let env = detect_environment();
+            let cfg = UserConfig::load();
             IpcResponse::Status(EngineStatus {
                 is_running: true,
                 is_paused: is_paused.load(Ordering::SeqCst),
                 active_wallpaper: wp,
-                target_fps: 60,
-                playback_speed: 1.0,
-                volume: 0.0,
+                target_fps: cfg.target_fps,
+                playback_speed: cfg.playback_speed,
+                volume: cfg.volume,
                 active_sink: env.active_sink_name,
                 platform: env.desktop_environment,
             })
+        }
+        IpcCommand::GetConfig => {
+            IpcResponse::Config(UserConfig::load())
+        }
+        IpcCommand::SaveConfig(new_cfg) => {
+            let _ = new_cfg.save();
+            IpcResponse::Ok { message: "Config saved".into() }
         }
         IpcCommand::ListWallpapers => {
             IpcResponse::Wallpapers(vec![])

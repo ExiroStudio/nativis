@@ -6,6 +6,9 @@ use std::os::unix::net::UnixStream;
 #[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
 
+pub mod config;
+pub use config::UserConfig;
+
 /// Represents an IPC Command sent from the UI or CLI to the background Daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
@@ -28,6 +31,10 @@ pub enum IpcCommand {
     SetVolume { volume: f32 },
     /// Request current engine status
     GetStatus,
+    /// Request current user config
+    GetConfig,
+    /// Save user config
+    SaveConfig(UserConfig),
     /// List known/cached wallpapers
     ListWallpapers,
     /// List all installed and available plugins
@@ -47,6 +54,7 @@ pub enum IpcResponse {
     Ok { message: String },
     Error { message: String },
     Status(EngineStatus),
+    Config(UserConfig),
     Wallpapers(Vec<WallpaperItem>),
     Plugins(Vec<PluginInfo>),
     Environment(EnvironmentInfo),
@@ -350,5 +358,16 @@ mod tests {
         assert!(plugins.iter().any(|p| p.category == "platform_adapter"));
         assert!(plugins.iter().any(|p| p.category == "media_source"));
         assert!(plugins.iter().any(|p| p.id == "platform-kde" && p.status == "active"));
+    }
+
+    #[test]
+    fn test_user_config() {
+        let mut cfg = UserConfig::default();
+        assert_eq!(cfg.scaling, "fill");
+        assert_eq!(cfg.playback_speed, 1.0);
+        cfg.scaling = "fit".to_string();
+        let json = serde_json::to_string(&cfg).unwrap();
+        let loaded: UserConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.scaling, "fit");
     }
 }
