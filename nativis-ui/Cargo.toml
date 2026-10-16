@@ -1,0 +1,13 @@
+[package]
+name = "nativis-ui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+slint = { workspace = true }
+nativis-ipc = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[build-dependencies]
+slint-build = { workspace = true }
