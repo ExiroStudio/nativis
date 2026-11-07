@@ -73,7 +73,7 @@ impl UserConfig {
 
         // If default wallpaper doesn't exist, search for any known media in current directory
         if !Path::new(&cfg.active_wallpaper).exists() {
-            let candidates = ["arlenchino.mp4", "video4k.mp4", "CuteBunny.jpg", "arona.mp4", "remielle.mp4", "WallpaperSunna.jpg", "1080.mp4", "video.mp4"];
+            let candidates = ["arlenchino.mp4", "CuteBunny.jpg", "arona.mp4", "remielle.mp4", "WallpaperSunna.jpg", "1080.mp4", "video.mp4", "video4k.mp4"];
             for candidate in candidates {
                 if Path::new(candidate).exists() {
                     cfg.active_wallpaper = candidate.to_string();

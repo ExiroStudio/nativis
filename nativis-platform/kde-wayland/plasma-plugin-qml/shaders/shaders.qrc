@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/shaders">
+        <file>nv12.vert.qsb</file>
+        <file>nv12.frag.qsb</file>
+    </qresource>
+</RCC>

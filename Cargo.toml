@@ -19,8 +19,10 @@ members = [
     "plugins/image_backend",
     "plugins/video_backend",
 
-    # Platform (KDE Plasma X11)
-    "nativis-platform/kde-x11/plasma-plugin", "nativis-platform/kde-x11/platform", "xtask",
+    # Platform (KDE Plasma X11, KDE Plasma Wayland, Generic Wayland Layer-Shell)
+    "nativis-platform/kde-x11/plasma-plugin", "nativis-platform/kde-x11/platform",
+    "nativis-platform/kde-wayland/plasma-plugin", "nativis-platform/kde-wayland/platform",
+    "nativis-platform/wayland", "xtask",
 ]
 
 [workspace.package]
@@ -80,6 +82,8 @@ nativis-ui       = { path = "nativis-ui" }
 nativis-plugin-image = { path = "plugins/image_backend" }
 nativis-plugin-video = { path = "plugins/video_backend" }
 nativis-platform-kde = { path = "nativis-platform/kde-x11/platform" }
+nativis-platform-kde-wayland = { path = "nativis-platform/kde-wayland/platform" }
+nativis-platform-wayland = { path = "nativis-platform/wayland" }
 
 # ── Binary (nativis-cli placeholder) ─────────────────────────────────────────
 [package]
@@ -106,4 +110,6 @@ nativis-plugin-image  = { workspace = true }
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 nativis-plugin-video  = { workspace = true }
 nativis-platform-kde  = { workspace = true }
+nativis-platform-kde-wayland = { workspace = true }
+nativis-platform-wayland = { workspace = true }
 nativis-transport-shm = { workspace = true }

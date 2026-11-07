@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossbeam_channel::{unbounded, Sender};
 use parking_lot::RwLock;
 use tracing::{error, info, warn};
@@ -19,10 +19,35 @@ use nativis_runtime::{Runtime, RuntimeCommand, RuntimeConfig};
 #[cfg(not(target_os = "windows"))]
 use nativis_platform_kde::KdePlatform;
 #[cfg(not(target_os = "windows"))]
+use nativis_platform_kde_wayland::KdeWaylandPlatform;
+#[cfg(not(target_os = "windows"))]
+use nativis_platform_wayland::WaylandPlatform;
+#[cfg(not(target_os = "windows"))]
 use nativis_plugin_video::VideoBackend;
 
 #[cfg(not(target_os = "windows"))]
 use nativis_core::platform::Platform;
+
+#[cfg(not(target_os = "windows"))]
+fn create_platform() -> Box<dyn Platform> {
+    let env = detect_environment();
+    let de_upper = env.desktop_environment.to_uppercase();
+    if de_upper.contains("KDE") {
+        if env.is_wayland {
+            info!("Selected KDE Wayland Platform Adapter (Native Plasma 6 QML Plugin & POSIX SHM)");
+            Box::new(KdeWaylandPlatform::new())
+        } else {
+            info!("Selected KDE X11 Platform Adapter (Native Plasma 5 QML Plugin & POSIX SHM)");
+            Box::new(KdePlatform::new())
+        }
+    } else if env.is_wayland {
+        info!("Selected Generic Wayland Platform Adapter (zwlr_layer_shell_v1, Layer::Background)");
+        Box::new(WaylandPlatform::new())
+    } else {
+        info!("Selected Fallback Platform Adapter (KDE X11)");
+        Box::new(KdePlatform::new())
+    }
+}
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -33,9 +58,9 @@ fn main() -> Result<()> {
     if args.iter().any(|a| a == "--reinstall-platform") {
         #[cfg(not(target_os = "windows"))]
         {
-            let mut platform = KdePlatform::new();
+            let mut platform = create_platform();
             platform.bootstrap(true)?;
-            println!("Platform reinstalled successfully.");
+            println!("Platform bootstrapped successfully.");
             return Ok(());
         }
         #[cfg(target_os = "windows")]
@@ -89,6 +114,27 @@ fn main() -> Result<()> {
                 }
                 return Ok(());
             }
+            "stop" | "--stop" | "shutdown" => {
+                if is_daemon_running() {
+                    match send_command(&IpcCommand::Shutdown) {
+                        Ok(_) => println!("✓ Nativis daemon stopped."),
+                        Err(e) => eprintln!("Error sending shutdown command: {}", e),
+                    }
+                } else {
+                    println!("Nativis daemon is not running.");
+                }
+                return Ok(());
+            }
+            "restart" => {
+                if is_daemon_running() {
+                    let _ = send_command(&IpcCommand::Shutdown);
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                let cfg = UserConfig::load();
+                ensure_daemon_running(Some(&cfg.active_wallpaper))?;
+                println!("✓ Nativis daemon restarted.");
+                return Ok(());
+            }
             "help" | "--help" | "-h" => {
                 println!("🌌 Nativis Wallpaper Engine");
                 println!("Usage:");
@@ -98,6 +144,8 @@ fn main() -> Result<()> {
                 println!("  nativis status          Show engine status");
                 println!("  nativis pause           Pause live playback");
                 println!("  nativis resume          Resume live playback");
+                println!("  nativis stop            Stop background daemon");
+                println!("  nativis restart         Restart background daemon");
                 println!("  nativis --help          Show this help message");
                 return Ok(());
             }
@@ -114,10 +162,6 @@ fn main() -> Result<()> {
             }
             _ => {
                 let target_media = &args[1];
-                let mut cfg = UserConfig::load();
-                cfg.active_wallpaper = target_media.clone();
-                let _ = cfg.save();
-
                 if is_daemon_running() {
                     info!("Daemon is already running. Sending SetWallpaper IPC command...");
                     match send_command(&IpcCommand::SetWallpaper {
@@ -125,8 +169,16 @@ fn main() -> Result<()> {
                         monitor: None,
                         scaling: None,
                     }) {
-                        Ok(_) => {
-                            println!("✓ Wallpaper updated to: {}", target_media);
+                        Ok(IpcResponse::Ok { message }) => {
+                            println!("✓ {}", message);
+                            return Ok(());
+                        }
+                        Ok(IpcResponse::Error { message }) => {
+                            eprintln!("✗ Error setting wallpaper: {}", message);
+                            return Ok(());
+                        }
+                        Ok(other) => {
+                            println!("Daemon response: {:?}", other);
                             return Ok(());
                         }
                         Err(e) => {
@@ -134,6 +186,9 @@ fn main() -> Result<()> {
                         }
                     }
                 } else {
+                    let mut cfg = UserConfig::load();
+                    cfg.active_wallpaper = target_media.clone();
+                    let _ = cfg.save();
                     return run_daemon(Some(target_media));
                 }
             }
@@ -147,21 +202,27 @@ fn main() -> Result<()> {
     nativis_ui::run_ui()
 }
 
-/// Ensures the daemon is running; if not, spawns it on a background thread.
+/// Ensures the daemon is running; if not, spawns it as a detached background process.
 fn ensure_daemon_running(default_wallpaper: Option<&str>) -> Result<()> {
     if !is_daemon_running() {
-        info!("Starting background Nativis Engine daemon thread...");
-        let wp_string = default_wallpaper.map(|s| s.to_string());
-        std::thread::spawn(move || {
-            if let Err(e) = run_daemon(wp_string.as_deref()) {
-                error!("Daemon error: {}", e);
-            }
-        });
+        info!("Spawning background Nativis Engine daemon process...");
+        let current_exe = std::env::current_exe()?;
+        let mut cmd = std::process::Command::new(current_exe);
+        cmd.arg("--no-gui");
+        if let Some(wp) = default_wallpaper {
+            cmd.arg(wp);
+        }
+        cmd.stdin(std::process::Stdio::null())
+           .stdout(std::process::Stdio::null())
+           .stderr(std::process::Stdio::inherit());
+
+        cmd.spawn().context("Failed to spawn background daemon process")?;
 
         // Give the daemon a moment to bind the IPC socket
-        for _ in 0..10 {
+        for _ in 0..30 {
             std::thread::sleep(std::time::Duration::from_millis(50));
             if is_daemon_running() {
+                info!("Nativis daemon is online and responding via IPC.");
                 break;
             }
         }
@@ -183,7 +244,7 @@ fn run_daemon(initial_wallpaper: Option<&str>) -> Result<()> {
     // 1. Initialize Platform Sink
     #[cfg(not(target_os = "windows"))]
     let sink = {
-        let mut platform = KdePlatform::new();
+        let mut platform = create_platform();
         platform.bootstrap(false)?;
         platform.create_sink(&resources)?
     };
@@ -219,7 +280,19 @@ fn run_daemon(initial_wallpaper: Option<&str>) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("No plugin found for initial wallpaper: {}", initial_uri))?;
 
     let clock = MediaClock::new();
-    backend.open(&asset_path, &clock, &resources)?;
+    if let Err(e) = backend.open(&asset_path, &clock, &resources) {
+        warn!(
+            "Failed to open initial wallpaper '{}': {}. Falling back to default static image.",
+            initial_uri, e
+        );
+        let fallback = AssetPath::parse("CuteBunny.jpg")?;
+        let mut fallback_backend = plugin_manager
+            .open(&fallback)
+            .ok_or_else(|| anyhow::anyhow!("No plugin found for fallback image"))?;
+        fallback_backend.open(&fallback, &clock, &resources)?;
+        backend = fallback_backend;
+        *current_wallpaper.write() = Some("CuteBunny.jpg".to_string());
+    }
 
     info!("Starting runtime conductor loop with IPC command channel...");
     let config = RuntimeConfig { target_fps: 60 };

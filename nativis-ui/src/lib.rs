@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::Result;
 use tracing::{info, warn};
 use slint::{Model, ModelRc, VecModel};
-use nativis_ipc::{IpcCommand, UserConfig, detect_environment, is_daemon_running, send_command};
+use nativis_ipc::{IpcCommand, IpcResponse, UserConfig, detect_environment, is_daemon_running, send_command};
 
 /// Main entry point to launch the Nativis Modern UI.
 pub fn run_ui() -> Result<()> {
@@ -59,13 +59,6 @@ pub fn run_ui() -> Result<()> {
         info!("UI requested to apply wallpaper: {}", target_path);
         let path_str = target_path.to_string();
 
-        // Persist to user config
-        let mut cfg = UserConfig::load();
-        cfg.active_wallpaper = path_str.clone();
-        if let Err(e) = cfg.save() {
-            warn!("Failed to save config: {}", e);
-        }
-
         // Send IPC command to background daemon
         let cmd = IpcCommand::SetWallpaper {
             uri: path_str.clone(),
@@ -74,27 +67,43 @@ pub fn run_ui() -> Result<()> {
         };
 
         match send_command(&cmd) {
-            Ok(resp) => {
-                info!("Daemon response: {:?}", resp);
-            }
-            Err(e) => {
-                warn!("Could not reach daemon via IPC ({}), running directly or queuing", e);
-            }
-        }
+            Ok(IpcResponse::Ok { message }) => {
+                info!("Daemon applied wallpaper: {}", message);
+                // Persist to user config on success
+                let mut cfg = UserConfig::load();
+                cfg.active_wallpaper = path_str.clone();
+                let _ = cfg.save();
 
-        // Update active indicators in the UI
-        if let Some(app) = app_weak.upgrade() {
-            let current_model = app.get_wallpapers();
-            let mut updated_items = Vec::new();
-            for i in 0..current_model.row_count() {
-                if let Some(mut row) = current_model.row_data(i) {
-                    row.is_active = row.name == path_str || row.path == path_str;
-                    updated_items.push(row);
+                // Update active indicators in the UI
+                if let Some(app) = app_weak.upgrade() {
+                    let current_model = app.get_wallpapers();
+                    let mut updated_items = Vec::new();
+                    for i in 0..current_model.row_count() {
+                        if let Some(mut row) = current_model.row_data(i) {
+                            row.is_active = row.name == path_str || row.path == path_str;
+                            updated_items.push(row);
+                        }
+                    }
+                    app.set_wallpapers(ModelRc::new(VecModel::from(updated_items)));
+                    app.set_engine_running(true);
+                    app.set_engine_status_text("Engine Online • 60 FPS".into());
                 }
             }
-            app.set_wallpapers(ModelRc::new(VecModel::from(updated_items)));
-            app.set_engine_running(true);
-            app.set_engine_status_text("Engine Online • 60 FPS".into());
+            Ok(IpcResponse::Error { message }) => {
+                warn!("Daemon reported error applying wallpaper: {}", message);
+                if let Some(app) = app_weak.upgrade() {
+                    app.set_engine_status_text(format!("Error: {}", message).into());
+                }
+            }
+            Ok(other) => {
+                info!("Daemon response: {:?}", other);
+            }
+            Err(e) => {
+                warn!("Could not reach daemon via IPC ({}). Engine may be offline.", e);
+                if let Some(app) = app_weak.upgrade() {
+                    app.set_engine_status_text("Engine Offline".into());
+                }
+            }
         }
     });
 
@@ -168,7 +177,7 @@ fn scan_wallpapers() -> Vec<ScannedWallpaper> {
 
     let known_files = [
         ("arlenchino.mp4", "video", "1080p 60fps (NV12)", "15.2 MB"),
-        ("video4k.mp4", "video", "3840x2160 (4K NV12)", "23.1 MB"),
+        ("video4k.mp4", "video", "3840x2160 (4K HEVC)", "23.1 MB"),
         ("CuteBunny.jpg", "image", "1920x1080 (RGBA)", "796 KB"),
         ("arona.mp4", "video", "1080p 60fps (NV12)", "33.0 MB"),
         ("WallpaperSunna.jpg", "image", "3840x2160 (RGBA)", "971 KB"),

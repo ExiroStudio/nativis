@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 fn main() {
@@ -10,18 +10,101 @@ fn main() {
         None => {
             eprintln!("Usage: cargo xtask <task>");
             eprintln!("Tasks:");
-            eprintln!("  bundle-kde");
+            eprintln!("  bundle-kde          Assemble KDE Plasma 5 (X11) bundle");
+            eprintln!("  bundle-kde-wayland  Assemble KDE Plasma 6 (Wayland) bundle");
+            eprintln!("  bundle-all          Assemble all platform bundles");
             std::process::exit(1);
         }
     };
 
     match task.as_str() {
         "bundle-kde" => bundle_kde(),
+        "bundle-kde-wayland" => bundle_kde_wayland(),
+        "bundle-all" => {
+            bundle_kde();
+            bundle_kde_wayland();
+        }
         _ => {
             eprintln!("Unknown task: {}", task);
             std::process::exit(1);
         }
     }
+}
+
+fn bundle_kde_wayland() {
+    let workspace_root = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap())
+        .parent()
+        .unwrap()
+        .to_path_buf();
+
+    let plasma_src_dir = workspace_root.join("nativis-platform/kde-wayland/plasma-plugin-qml");
+    let bundle_dir = workspace_root.join("platforms/kde-wayland");
+
+    println!("============================================================");
+    println!("Assembling KDE Plasma 6 Wayland bundle...");
+    println!("============================================================");
+
+    // 1. Build Rust cdylib
+    println!("Building Rust C-ABI (nativis-v2-core) for KDE Wayland Plugin...");
+    let status = Command::new("cargo")
+        .args(&["build", "--release", "-p", "nativis-v2-core"])
+        .current_dir(&workspace_root)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .expect("Failed to run cargo build");
+
+    if !status.success() {
+        eprintln!("Cargo build failed");
+        std::process::exit(1);
+    }
+
+    // 2. Build C++ Plugin with CMake
+    println!("Building KDE Wayland Plasma Plugin with CMake...");
+    let build_dir = plasma_src_dir.join("build");
+    let _ = fs::remove_dir_all(&build_dir);
+    fs::create_dir_all(&build_dir).unwrap();
+
+    let status = Command::new("cmake")
+        .arg("..")
+        .current_dir(&build_dir)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .expect("Failed to run cmake");
+
+    if !status.success() {
+        eprintln!("CMake failed");
+        std::process::exit(1);
+    }
+
+    let status = Command::new("make")
+        .current_dir(&build_dir)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .expect("Failed to run make");
+
+    if !status.success() {
+        eprintln!("Make failed");
+        std::process::exit(1);
+    }
+
+    // 3. Assemble Bundle into platforms/kde-wayland/
+    let ui_dir = bundle_dir.join("contents/ui");
+    fs::create_dir_all(&ui_dir).unwrap();
+
+    fs::copy(
+        build_dir.join("libnativisplugin.so"),
+        ui_dir.join("libnativisplugin.so"),
+    ).unwrap();
+
+    fs::copy(
+        workspace_root.join("target/release/libnativis_v2_core.so"),
+        ui_dir.join("libnativis_v2_core.so"),
+    ).unwrap();
+
+    println!("Bundle kde-wayland assembled successfully at {:?}!", bundle_dir);
 }
 
 fn bundle_kde() {

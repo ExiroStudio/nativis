@@ -1,0 +1,5 @@
+/home/exiro/Workspace/nativis/nativis-platform/kde-wayland/plasma-plugin-qml/build/CMakeFiles/nativisplugin.dir
+/home/exiro/Workspace/nativis/nativis-platform/kde-wayland/plasma-plugin-qml/build/CMakeFiles/edit_cache.dir
+/home/exiro/Workspace/nativis/nativis-platform/kde-wayland/plasma-plugin-qml/build/CMakeFiles/rebuild_cache.dir
+/home/exiro/Workspace/nativis/nativis-platform/kde-wayland/plasma-plugin-qml/build/CMakeFiles/nativisplugin_autogen_timestamp_deps.dir
+/home/exiro/Workspace/nativis/nativis-platform/kde-wayland/plasma-plugin-qml/build/CMakeFiles/nativisplugin_autogen.dir

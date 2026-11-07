@@ -1,0 +1,5 @@
+[package]
+id = "com.nativis.wallpaper"
+name = "Nativis Live Wallpaper (Wayland)"
+version = "2.0.0"
+target = "plasma-6-wayland"

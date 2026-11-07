@@ -1,2 +1,6 @@
 [alias]
 xtask = "run --package xtask --"
+
+[env]
+PKG_CONFIG_PATH = { value = "/usr/lib64/pkgconfig:/usr/share/pkgconfig", force = false }
+BINDGEN_EXTRA_CLANG_ARGS = { value = "-I/usr/lib/clang/22/include", force = false }
