@@ -104,6 +104,11 @@ fn bundle_kde_wayland() {
         ui_dir.join("libnativis_v2_core.so"),
     ).unwrap();
 
+    let qmldir_src = plasma_src_dir.join("qmldir.in");
+    if qmldir_src.exists() {
+        let _ = fs::copy(qmldir_src, ui_dir.join("qmldir"));
+    }
+
     println!("Bundle kde-wayland assembled successfully at {:?}!", bundle_dir);
 }
 
@@ -165,7 +170,7 @@ fn bundle_kde() {
     // 2. Assemble Bundle
     println!("Assembling bundle in {:?}...", bundle_dir);
     
-    // User-space package UI
+    // Assemble Bundle into contents/ui
     let ui_dir = bundle_dir.join("contents/ui");
     fs::create_dir_all(&ui_dir).unwrap();
 
@@ -174,24 +179,23 @@ fn bundle_kde() {
         ui_dir.join("main.qml")
     ).unwrap();
 
-    // System-space QML extension plugin
-    let system_qml_dir = bundle_dir.join("system-qml/org/nativis");
-    fs::create_dir_all(&system_qml_dir).unwrap();
-
     fs::copy(
         build_dir.join("libnativisplugin.so"),
-        system_qml_dir.join("libnativisplugin.so")
-    ).unwrap();
-
-    fs::write(
-        system_qml_dir.join("qmldir"),
-        "module org.nativis\nplugin nativisplugin\n"
+        ui_dir.join("libnativisplugin.so")
     ).unwrap();
 
     fs::copy(
         workspace_root.join("target/release/libnativis_v1_core.so"),
-        system_qml_dir.join("libnativis_v1_core.so")
+        ui_dir.join("libnativis_v1_core.so")
     ).unwrap();
+
+    fs::write(
+        ui_dir.join("qmldir"),
+        "module org.nativis\nplugin nativisplugin\n"
+    ).unwrap();
+
+    // Clean up old system-qml if it exists
+    let _ = fs::remove_dir_all(bundle_dir.join("system-qml"));
 
     // Generate metadata.json
     let metadata = r#"{

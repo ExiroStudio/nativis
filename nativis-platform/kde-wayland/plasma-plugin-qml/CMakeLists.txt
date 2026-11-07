@@ -10,7 +10,7 @@ set(CMAKE_AUTORCC ON)
 
 find_package(Qt6 COMPONENTS Core Gui Qml Quick OpenGL REQUIRED)
 
-find_program(QSB_EXECUTABLE NAMES qsb-qt6 qsb REQUIRED)
+find_program(QSB_EXECUTABLE NAMES qsb-qt6 qsb PATHS /usr/lib/qt6/bin /usr/lib64/qt6/bin REQUIRED)
 
 set(SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
 set(VERT_SRC "${SHADER_DIR}/nv12.vert")

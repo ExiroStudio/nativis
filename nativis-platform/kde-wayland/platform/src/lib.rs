@@ -24,7 +24,7 @@ impl KdeWaylandPlatform {
     }
 
     fn check_and_install_bundle(&self, force: bool) -> Result<bool> {
-        let bundle_dir = Path::new("./platforms/kde-wayland");
+        let bundle_dir = find_bundle_dir();
         if !bundle_dir.exists() {
             warn!("KDE Wayland bundle directory not found at {:?}", bundle_dir);
             return Ok(false);
@@ -40,7 +40,7 @@ impl KdeWaylandPlatform {
             fs::create_dir_all(&self.installed_plugin_dir)?;
 
             // Copy recursively platforms/kde-wayland to installed_plugin_dir
-            copy_dir_all(bundle_dir, &self.installed_plugin_dir)
+            copy_dir_all(&bundle_dir, &self.installed_plugin_dir)
                 .context("Failed to copy KDE Wayland wallpaper package")?;
 
             // Try kpackagetool6 if available to ensure Plasma recognizes package
@@ -95,6 +95,22 @@ impl KdeWaylandPlatform {
         }
         Ok(())
     }
+}
+
+fn find_bundle_dir() -> PathBuf {
+    let local = Path::new("./platforms/kde-wayland");
+    if local.exists() {
+        return local.to_path_buf();
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let next_to_exe = parent.join("platforms/kde-wayland");
+            if next_to_exe.exists() {
+                return next_to_exe;
+            }
+        }
+    }
+    PathBuf::from("./platforms/kde-wayland")
 }
 
 fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result<()> {

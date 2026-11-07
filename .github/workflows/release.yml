@@ -29,6 +29,7 @@ jobs:
 
       - name: Install Build Dependencies
         run: |
+          sudo add-apt-repository -y universe || true
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
@@ -37,16 +38,23 @@ jobs:
             nasm \
             clang \
             libclang-dev \
+            qtbase5-dev \
+            qtdeclarative5-dev \
+            libqt5opengl5-dev \
             qt6-base-dev \
             qt6-declarative-dev \
+            qt6-shader-baker \
+            qt6-shadertools-dev \
             libgl1-mesa-dev \
             libegl1-mesa-dev \
             libfontconfig1-dev \
             libfreetype-dev \
             libwayland-dev
 
-      - name: Assemble KDE Plasma Plugin Bundle
-        run: cargo run -p xtask -- bundle-kde
+      - name: Assemble Platform Bundles (KDE Plasma 5 & 6)
+        run: |
+          export PATH="/usr/lib/qt6/bin:$PATH"
+          cargo run -p xtask -- bundle-all
 
       - name: Build Standalone Engine Binary
         run: cargo build --release --bin nativis --target x86_64-unknown-linux-gnu --features nativis-plugin-video/bundle-ffmpeg
@@ -58,9 +66,15 @@ jobs:
           strip dist/nativis-linux-x86_64
           chmod +x dist/nativis-linux-x86_64
 
-          # Compute SHA-256 checksum for verification
+          # Also package complete tarball including desktop platform bundles (KDE Plasma 5 & 6)
+          cp dist/nativis-linux-x86_64 nativis
+          tar -czf dist/nativis-linux-x86_64.tar.gz nativis platforms/
+          rm nativis
+
+          # Compute SHA-256 checksums
           cd dist
           sha256sum nativis-linux-x86_64 > nativis-linux-x86_64.sha256
+          sha256sum nativis-linux-x86_64.tar.gz > nativis-linux-x86_64.tar.gz.sha256
           cd ..
 
       - name: Upload Artifact
@@ -92,6 +106,8 @@ jobs:
           files: |
             dist/nativis-linux-x86_64
             dist/nativis-linux-x86_64.sha256
+            dist/nativis-linux-x86_64.tar.gz
+            dist/nativis-linux-x86_64.tar.gz.sha256
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

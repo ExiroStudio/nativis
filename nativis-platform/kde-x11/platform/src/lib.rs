@@ -24,79 +24,49 @@ impl KdePlatform {
     }
 
     fn check_and_install_bundle(&self, force: bool) -> Result<bool> {
-        let bundle_dir = Path::new("./platforms/kde-x11");
+        let bundle_dir = find_bundle_dir();
         if !bundle_dir.exists() {
-            warn!("Bundle directory not found at {:?}", bundle_dir);
+            warn!("KDE Plasma 5 bundle directory not found at {:?}", bundle_dir);
             return Ok(false);
         }
 
-        let mut installed_something = false;
+        let main_qml = self.installed_plugin_dir.join("contents/ui/main.qml");
+        let plugin_so = self.installed_plugin_dir.join("contents/ui/libnativisplugin.so");
 
-        // 1. Install System QML Plugin (Requires sudo)
-        let system_qml_target = Path::new("/usr/lib/x86_64-linux-gnu/qt5/qml/org/nativis");
-        let system_plugin_so = system_qml_target.join("libnativisplugin.so");
-        let bundle_system_qml = bundle_dir.join("system-qml/org/nativis");
-        
-        let needs_install = force || !system_plugin_so.exists() || {
-            let qmldir_path = system_qml_target.join("qmldir");
-            qmldir_path.exists() && std::fs::read_to_string(qmldir_path).unwrap_or_default().contains("plugin nativisplugin .")
-        };
+        let needs_install = force || !main_qml.exists() || !plugin_so.exists();
 
-        if bundle_system_qml.exists() && needs_install {
-            println!("============================================================");
-            println!("Nativis needs to install the C++ QML plugin into the system");
-            println!("Qt directory to integrate with KDE Plasma Settings.");
-            println!("The following commands will be executed with sudo:");
-            
-            let parent_dir = "/usr/lib/x86_64-linux-gnu/qt5/qml/org";
-            println!("    sudo mkdir -p {}", parent_dir);
-            println!("    sudo cp -r {} {}", bundle_system_qml.display(), parent_dir);
-            println!("============================================================");
-            
-            let status1 = Command::new("sudo")
-                .args(&["mkdir", "-p", parent_dir])
-                .status()?;
-                
-            let status2 = Command::new("sudo")
-                .args(&["cp", "-r", bundle_system_qml.to_str().unwrap(), parent_dir])
-                .status()?;
+        if needs_install {
+            info!("Installing KDE Plasma 5 wallpaper package into {:?}...", self.installed_plugin_dir);
+            fs::create_dir_all(&self.installed_plugin_dir)?;
 
-            if !status1.success() || !status2.success() {
-                warn!("Failed to install system QML plugin.");
-            } else {
-                info!("Successfully installed system QML plugin.");
-                installed_something = true;
-            }
-        }
+            // Copy recursively platforms/kde-x11 to installed_plugin_dir (User Space, zero sudo)
+            copy_dir_all(&bundle_dir, &self.installed_plugin_dir)
+                .context("Failed to copy KDE Plasma 5 wallpaper package")?;
 
-        // 2. Install KDE Plasma Wallpaper Package (User Space)
-        info!("Installing KDE Plasma wallpaper package using kpackagetool5...");
-        let _ = Command::new("kpackagetool5")
-            .args(&["-t", "Plasma/Wallpaper", "-r", "com.nativis.wallpaper"])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
+            // Try kpackagetool5 if available to ensure Plasma recognizes package
+            let _ = Command::new("kpackagetool5")
+                .args(&["-t", "Plasma/Wallpaper", "-r", "com.nativis.wallpaper"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
 
-        let status = Command::new("kpackagetool5")
-            .args(&["-t", "Plasma/Wallpaper", "-i", bundle_dir.to_str().unwrap()])
-            .status()?;
-            
-        if status.success() {
-            info!("KDE Plasma wallpaper package installed.");
-            installed_something = true;
-        } else {
-            warn!("Failed to install KDE Plasma wallpaper package.");
-        }
+            let _ = Command::new("kpackagetool5")
+                .args(&["-t", "Plasma/Wallpaper", "-i", bundle_dir.to_str().unwrap()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
 
-        // Update KDE System Configuration Cache (sycoca) so Plasma recognizes the new wallpaper plugin
-        if installed_something {
+            // Refresh sycoca cache
             let _ = Command::new("kbuildsycoca5")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status();
+
+            info!("KDE Plasma 5 wallpaper package installed successfully.");
+            return Ok(true);
         }
 
-        Ok(installed_something)
+        Ok(false)
     }
 
     fn reload_plasma(&self) -> Result<()> {
@@ -148,4 +118,35 @@ impl Drop for KdePlatform {
         // For PoC, the OS cleans up our SHM because we don't unlink it if plasma is still using it,
         // or we do unlink it if we want it to die with us.
     }
+}
+
+fn find_bundle_dir() -> PathBuf {
+    let local = Path::new("./platforms/kde-x11");
+    if local.exists() {
+        return local.to_path_buf();
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let next_to_exe = parent.join("platforms/kde-x11");
+            if next_to_exe.exists() {
+                return next_to_exe;
+            }
+        }
+    }
+    PathBuf::from("./platforms/kde-x11")
+}
+
+fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result<()> {
+    fs::create_dir_all(&dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let dst_path = dst.as_ref().join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_all(entry.path(), dst_path)?;
+        } else {
+            fs::copy(entry.path(), dst_path)?;
+        }
+    }
+    Ok(())
 }

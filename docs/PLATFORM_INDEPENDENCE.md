@@ -55,6 +55,13 @@ File `src/main.rs` dan `nativis-core/ipc` bertindak sebagai *router murni*:
    } ...
    ```
 
+### Rule 5: User-Space First & Zero-Sudo Policy (Distro-Agnostic Principle)
+Semua platform Nativis **WAJIB berjalan 100% di user-space tanpa membutuhkan akses `sudo` atau hak akses root**:
+- **Zero Sudo**: Tidak boleh menulis ke direktori sistem seperti `/usr/lib/...` atau memanggil `sudo`.
+- **Standar XDG**: Semua instalasi ekstensi/plugin menggunakan direktori standar pengguna (`$HOME/.local/share/...`).
+- **Relative QML Import (`import "."`)**: Plugin C++ QML (KDE Plasma 5 & 6) diletakkan di dalam folder bundle pengguna (`contents/ui/`) dan diimpor menggunakan `import "."`. Hal ini menjamin wallpaper berjalan identik di semua distro Linux (Ubuntu, Fedora, Arch, Void, openSUSE, dll.) tanpa terpengaruh perbedaan arsitektur folder library sistem (`/usr/lib/x86_64-linux-gnu` vs `/usr/lib64` vs `/usr/lib`).
+- **Protokol Standar**: Platform Wayland murni (Hyprland, Sway, dll.) menggunakan protokol `zwlr_layer_shell_v1` langsung melalui socket Wayland pengguna (`$WAYLAND_DISPLAY`) tanpa perlu menginstal file apa pun ke sistem.
+
 ---
 
 ## 3. Checklist Sebelum Melakukan Perubahan Platform
