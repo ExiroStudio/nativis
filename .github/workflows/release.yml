@@ -57,6 +57,9 @@ jobs:
           cargo run -p xtask -- bundle-all
 
       - name: Build Standalone Engine Binary
+        env:
+          FFMPEG_MARCH: x86-64
+          FFMPEG_MTUNE: generic
         run: cargo build --release --bin nativis --target x86_64-unknown-linux-gnu --features nativis-plugin-video/bundle-ffmpeg
 
       - name: Prepare Single Binary Release Asset

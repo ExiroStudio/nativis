@@ -3094,6 +3094,7 @@ version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
  "ffmpeg-next",
+ "ffmpeg-sys-next",
  "nativis-asset",
  "nativis-core",
  "thiserror 2.0.19",
