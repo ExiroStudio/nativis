@@ -1,0 +1,13 @@
+[package]
+name = "nativis-platform-kde-wayland"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+nativis-core = { workspace = true }
+nativis-transport-shm = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+libc = "0.2"

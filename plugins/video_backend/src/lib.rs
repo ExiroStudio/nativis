@@ -314,6 +314,36 @@ impl MediaBackend for VideoBackend {
             )))?;
         let path_str = path.to_string_lossy().to_string();
 
+        // Synchronous validation: verify file can be opened and decoder is available
+        {
+            let ictx = ffmpeg::format::input(&path)
+                .map_err(|e| MediaError::Open(format!("Cannot open video file '{}': {}", path_str, e)))?;
+            let video_stream = ictx.streams().best(MediaType::Video)
+                .ok_or_else(|| MediaError::Open(format!("No video stream found in '{}'", path_str)))?;
+            let codec_ctx = ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())
+                .map_err(|e| MediaError::Open(format!("Failed to initialize codec context: {}", e)))?;
+
+            let decoder_available = unsafe {
+                let codec_id = (*codec_ctx.as_ptr()).codec_id;
+                !ffi::avcodec_find_decoder(codec_id).is_null()
+            };
+
+            if !decoder_available {
+                let codec_name = unsafe {
+                    let ptr = ffi::avcodec_get_name((*codec_ctx.as_ptr()).codec_id);
+                    if !ptr.is_null() {
+                        std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned()
+                    } else {
+                        "unknown".to_string()
+                    }
+                };
+                return Err(MediaError::Open(format!(
+                    "No FFmpeg decoder found for codec '{}' (e.g. system lacks {} decoder). Please use H.264/VP9/AV1 or install full codec packages.",
+                    codec_name, codec_name
+                )));
+            }
+        }
+
         // Clone the shared ResourceManager — zero cost (Arc clone).
         // We use it in update() to register a CpuBuffer per decoded frame.
         self.resources = Some(resources.clone());
@@ -753,4 +783,36 @@ fn decoder_thread(
     }
 
     info!("[NATIVIS DECODE] decoder thread exited cleanly");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use nativis_asset::AssetPath;
+    use nativis_core::clock::MediaClock;
+    use nativis_core::resource::ResourceManager;
+
+    #[test]
+    fn test_hevc_video4k_decoder_support() {
+        let video_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../video4k.mp4");
+        if !video_path.exists() {
+            eprintln!("video4k.mp4 not found, skipping test");
+            return;
+        }
+
+        let asset_path = AssetPath::parse(video_path.to_str().unwrap()).expect("Valid asset path");
+        let clock = MediaClock::new();
+        let resources = ResourceManager::new();
+        let mut backend = VideoBackend::new();
+
+        let result = backend.open(&asset_path, &clock, &resources);
+        if let Err(ref e) = result {
+            if e.to_string().contains("No FFmpeg decoder found for codec") {
+                eprintln!("System FFmpeg lacks HEVC codec decoder; test skipped (enable 'bundle-ffmpeg' feature for full bundled codec support).");
+                return;
+            }
+        }
+        assert!(result.is_ok(), "Failed to open HEVC video: {:?}", result.err());
+    }
 }

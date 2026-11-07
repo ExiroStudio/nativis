@@ -1,0 +1,18 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Nativis Team"
+            }
+        ],
+        "Category": "Wallpaper",
+        "Description": "GPU-accelerated live wallpaper engine for KDE Plasma 6",
+        "Icon": "preferences-desktop-wallpaper",
+        "Id": "com.nativis.wallpaper",
+        "Name": "Nativis Live Wallpaper",
+        "ServiceTypes": [
+            "Plasma/Wallpaper"
+        ],
+        "Version": "2.0"
+    }
+}

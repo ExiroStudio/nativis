@@ -147,10 +147,14 @@ pub fn detect_environment() -> EnvironmentInfo {
     };
 
     let de_upper = de.to_uppercase();
-    let (recommended_adapter, active_sink_name) = if de_upper.contains("KDE") {
-        ("KDE Plasma Native QML Adapter", "KDE Native QML (SHM)")
-    } else if is_wayland || de_upper.contains("HYPRLAND") || de_upper.contains("SWAY") {
-        ("Wayland Layer-Shell Adapter", "wlr-layer-shell Background")
+    let is_kde = de_upper.contains("KDE");
+
+    let (recommended_adapter, active_sink_name) = if is_kde {
+        ("KDE Plasma Native QML Adapter (SHM)", "KDE Native QML (SHM)")
+    } else if is_wayland {
+        ("Wayland Layer-Shell Adapter (Layer::Background)", "Wayland Layer::Background (WGPU)")
+    } else if de_upper.contains("GNOME") {
+        ("GNOME Shell Dedicated Adapter", "GNOME Desktop Extension")
     } else if de_upper.contains("XFCE") || de_upper.contains("I3") || de_upper.contains("BSPWM") || de_upper.contains("CINNAMON") || de_upper.contains("MATE") {
         ("X11 Root Window Adapter", "X11 Root Window Overlay")
     } else if cfg!(target_os = "windows") {
@@ -247,9 +251,9 @@ pub fn get_default_plugins() -> Vec<PluginInfo> {
             id: "platform-wayland".into(),
             name: "Wayland Layer-Shell Adapter".into(),
             category: "platform_adapter".into(),
-            description: "Render ke zwlr_layer_shell_v1 background layer (Hyprland, Sway, Wayfire)".into(),
-            status: "installed".into(),
-            version: "0.2.0".into(),
+            description: "Direct in-process WGPU render via zwlr_layer_shell_v1 — auto-selects Layer::Background (KDE) or Layer::Bottom (Sway/Hyprland/COSMIC)".into(),
+            status: "active".into(),
+            version: "1.0.0".into(),
         },
         PluginInfo {
             id: "platform-x11".into(),

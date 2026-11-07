@@ -1,0 +1,21 @@
+[package]
+name = "nativis-platform-wayland"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+nativis-core = { workspace = true }
+wgpu = { workspace = true }
+raw-window-handle = { workspace = true }
+pollster = { workspace = true }
+bytemuck = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+parking_lot = { workspace = true }
+
+# Wayland protocols & client
+wayland-client = { version = "0.31", features = ["system"] }
+wayland-protocols = { version = "0.32", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
