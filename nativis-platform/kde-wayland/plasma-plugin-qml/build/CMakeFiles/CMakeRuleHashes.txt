@@ -1,6 +1,0 @@
-# Hashes of file build rules.
-7621e919953662dd8b18ab68becf76b6 /home/exiro/Workspace/nativis/nativis-platform/kde-wayland/plasma-plugin-qml/shaders/nv12.frag.qsb
-a875830663d1dce8f049077edae9267b /home/exiro/Workspace/nativis/nativis-platform/kde-wayland/plasma-plugin-qml/shaders/nv12.vert.qsb
-55ee5c3273b450dfdc62d2666d569149 CMakeFiles/nativisplugin_autogen
-1112079358e5939353caab1c041f1dda nativisplugin_autogen/3QPYF6J63P/qrc_shaders.cpp
-45aef7ecaf33eaab6981d0cd8c3419db nativisplugin_autogen/timestamp

@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/exiro/Workspace/nativis/nativis-platform/kde-wayland/plasma-plugin-qml/build/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
