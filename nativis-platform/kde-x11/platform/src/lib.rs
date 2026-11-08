@@ -12,6 +12,35 @@ pub struct KdePlatform {
     installed_plugin_dir: PathBuf,
 }
 
+const METADATA_JSON: &[u8] = include_bytes!("../../../../platforms/kde-x11/metadata.json");
+const MANIFEST_TOML: &[u8] = include_bytes!("../../../../platforms/kde-x11/manifest.toml");
+const MAIN_QML: &[u8] = include_bytes!("../../../../platforms/kde-x11/contents/ui/main.qml");
+const QMLDIR: &[u8] = include_bytes!("../../../../platforms/kde-x11/contents/ui/qmldir");
+const LIBNATIVISPLUGIN_SO: &[u8] = include_bytes!("../../../../platforms/kde-x11/contents/ui/libnativisplugin.so");
+const LIBNATIVIS_V1_CORE_SO: &[u8] = include_bytes!("../../../../platforms/kde-x11/contents/ui/libnativis_v1_core.so");
+
+fn install_embedded_bundle(target_dir: &Path) -> Result<()> {
+    let ui_dir = target_dir.join("contents/ui");
+    fs::create_dir_all(&ui_dir)?;
+
+    fs::write(target_dir.join("metadata.json"), METADATA_JSON)?;
+    fs::write(target_dir.join("manifest.toml"), MANIFEST_TOML)?;
+
+    fs::write(ui_dir.join("main.qml"), MAIN_QML)?;
+    fs::write(ui_dir.join("qmldir"), QMLDIR)?;
+    fs::write(ui_dir.join("libnativisplugin.so"), LIBNATIVISPLUGIN_SO)?;
+    fs::write(ui_dir.join("libnativis_v1_core.so"), LIBNATIVIS_V1_CORE_SO)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(ui_dir.join("libnativisplugin.so"), fs::Permissions::from_mode(0o755));
+        let _ = fs::set_permissions(ui_dir.join("libnativis_v1_core.so"), fs::Permissions::from_mode(0o755));
+    }
+
+    Ok(())
+}
+
 impl KdePlatform {
     pub fn new() -> Self {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
@@ -25,10 +54,6 @@ impl KdePlatform {
 
     fn check_and_install_bundle(&self, force: bool) -> Result<bool> {
         let bundle_dir = find_bundle_dir();
-        if !bundle_dir.exists() {
-            warn!("KDE Plasma 5 bundle directory not found at {:?}", bundle_dir);
-            return Ok(false);
-        }
 
         let main_qml = self.installed_plugin_dir.join("contents/ui/main.qml");
         let plugin_so = self.installed_plugin_dir.join("contents/ui/libnativisplugin.so");
@@ -39,28 +64,29 @@ impl KdePlatform {
             info!("Installing KDE Plasma 5 wallpaper package into {:?}...", self.installed_plugin_dir);
             fs::create_dir_all(&self.installed_plugin_dir)?;
 
-            // Copy recursively platforms/kde-x11 to installed_plugin_dir (User Space, zero sudo)
-            copy_dir_all(&bundle_dir, &self.installed_plugin_dir)
-                .context("Failed to copy KDE Plasma 5 wallpaper package")?;
+            if bundle_dir.exists() {
+                info!("Installing from disk bundle directory: {:?}", bundle_dir);
+                copy_dir_all(&bundle_dir, &self.installed_plugin_dir)
+                    .context("Failed to copy KDE Plasma 5 wallpaper package from disk")?;
+            } else {
+                info!("Disk bundle not found. Extracting embedded KDE Plasma 5 wallpaper package into {:?}", self.installed_plugin_dir);
+                install_embedded_bundle(&self.installed_plugin_dir)
+                    .context("Failed to unpack embedded KDE Plasma 5 wallpaper package")?;
+            }
 
-            // Try kpackagetool5 if available to ensure Plasma recognizes package
-            let _ = Command::new("kpackagetool5")
-                .args(&["-t", "Plasma/Wallpaper", "-r", "com.nativis.wallpaper"])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-
-            let _ = Command::new("kpackagetool5")
-                .args(&["-t", "Plasma/Wallpaper", "-i", bundle_dir.to_str().unwrap()])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-
-            // Refresh sycoca cache
-            let _ = Command::new("kbuildsycoca5")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
+            // Refresh sycoca cache if kbuildsycoca is available
+            for sycoca_cmd in &["kbuildsycoca5", "kbuildsycoca6"] {
+                if let Ok(status) = Command::new(sycoca_cmd)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                {
+                    if status.success() {
+                        info!("Refreshed KDE sycoca cache using {}", sycoca_cmd);
+                        break;
+                    }
+                }
+            }
 
             info!("KDE Plasma 5 wallpaper package installed successfully.");
             return Ok(true);
@@ -70,19 +96,34 @@ impl KdePlatform {
     }
 
     fn reload_plasma(&self) -> Result<()> {
-        info!("Reloading Plasma desktop...");
-        let output = Command::new("qdbus")
-            .args(&[
-                "org.kde.plasmashell",
-                "/PlasmaShell",
-                "org.kde.PlasmaShell.evaluateScript",
-                "var Desktops = desktops(); for (i=0;i<Desktops.length;i++) { d = Desktops[i]; d.wallpaperPlugin = 'org.kde.image'; d.wallpaperPlugin = 'com.nativis.wallpaper'; }",
-            ])
-            .output()?;
+        info!("Applying Nativis wallpaper to Plasma 5 via DBus...");
+        let script = "var Desktops = desktops(); for (i=0;i<Desktops.length;i++) { d = Desktops[i]; d.wallpaperPlugin = 'org.kde.image'; d.wallpaperPlugin = 'com.nativis.wallpaper'; }";
 
-        if !output.status.success() {
-            warn!("Failed to reload plasma: {:?}", output);
+        for qdbus_cmd in &["qdbus", "qdbus-qt5", "qdbus5"] {
+            let output = Command::new(qdbus_cmd)
+                .args(&[
+                    "org.kde.plasmashell",
+                    "/PlasmaShell",
+                    "org.kde.PlasmaShell.evaluateScript",
+                    script,
+                ])
+                .output();
+
+            match output {
+                Ok(out) if out.status.success() => {
+                    info!("Plasma 5 wallpaper plugin reloaded successfully using {}.", qdbus_cmd);
+                    return Ok(());
+                }
+                Ok(out) => {
+                    warn!("{} reload script returned non-zero: {:?}", qdbus_cmd, out);
+                }
+                Err(_) => {
+                    // Try next command
+                }
+            }
         }
+
+        warn!("Could not find working qdbus executable (tried qdbus, qdbus-qt5, qdbus5).");
         Ok(())
     }
 }
