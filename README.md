@@ -4,7 +4,7 @@
 
   <p>
     <a href="https://github.com/ExiroStudio/nativis/releases"><img src="https://img.shields.io/github/v/release/ExiroStudio/nativis?style=flat-square" alt="Latest Release" /></a>
-    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue?style=flat-square" alt="License" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License" /></a>
     <img src="https://img.shields.io/badge/Rust-1.80%2B-orange?style=flat-square&logo=rust" alt="Rust 1.80+" />
     <img src="https://img.shields.io/badge/Platform-Wayland%20%7C%20X11-success?style=flat-square" alt="Linux Platform" />
   </p>
