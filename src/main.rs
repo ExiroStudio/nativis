@@ -241,12 +241,10 @@ fn run_daemon(initial_wallpaper: Option<&str>) -> Result<()> {
     // Channel for dynamic conductor commands
     let (command_tx, command_rx) = unbounded::<RuntimeCommand>();
 
-    // 1. Initialize Platform Sink
-    let sink = {
-        let mut platform = create_platform();
-        platform.bootstrap(false)?;
-        platform.create_sink(&resources)?
-    };
+    // 1. Initialize Platform and Sink (keep platform alive for daemon lifetime)
+    let mut platform = create_platform();
+    platform.bootstrap(false)?;
+    let sink = platform.create_sink(&resources)?;
 
     // 2. Start IPC Server Listener
     let _ipc_handle = start_ipc_server(

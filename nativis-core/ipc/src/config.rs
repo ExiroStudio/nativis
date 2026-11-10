@@ -41,6 +41,19 @@ impl Default for UserConfig {
 impl UserConfig {
     /// Resolves the user configuration directory ($XDG_CONFIG_HOME/nativis or ~/.config/nativis).
     pub fn config_dir() -> PathBuf {
+        #[cfg(windows)]
+        {
+            if let Ok(appdata) = std::env::var("APPDATA") {
+                if !appdata.is_empty() {
+                    return Path::new(&appdata).join("nativis");
+                }
+            }
+            if let Ok(userprofile) = std::env::var("USERPROFILE") {
+                if !userprofile.is_empty() {
+                    return Path::new(&userprofile).join(".config").join("nativis");
+                }
+            }
+        }
         if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
             if !xdg.is_empty() {
                 return Path::new(&xdg).join("nativis");
