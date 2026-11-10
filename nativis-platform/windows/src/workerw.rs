@@ -78,11 +78,7 @@ unsafe extern "system" fn wallpaper_wndproc(
         WM_ERASEBKGND => 1, // Suppress default background erase (avoids flickering)
         WM_PAINT => {
             let mut ps: PAINTSTRUCT = std::mem::zeroed();
-            let hdc = BeginPaint(hwnd, &mut ps);
-            // Solid dark brush fill for initial visual verification behind desktop icons
-            let brush = CreateSolidBrush(0x00151515);
-            FillRect(hdc, &ps.rcPaint, brush);
-            DeleteObject(brush as _);
+            BeginPaint(hwnd, &mut ps);
             EndPaint(hwnd, &ps);
             0
         }
@@ -116,6 +112,20 @@ unsafe extern "system" fn wallpaper_wndproc(
     }
 }
 
+#[cfg(windows)]
+unsafe fn discover_workerw(progman: HWND) -> HWND {
+    // Topology A: Windows 11 24H2+ (WorkerW as direct child of Progman)
+    let child_workerw = FindWindowExW(progman, std::ptr::null_mut(), to_wide("WorkerW").as_ptr(), std::ptr::null());
+    if !child_workerw.is_null() {
+        return child_workerw;
+    }
+
+    // Topology B: Classic Windows 10 & Windows 11 < 24H2 (WorkerW as sibling via EnumWindows)
+    let mut state = EnumState { workerw_hwnd: std::ptr::null_mut() };
+    EnumWindows(Some(enum_windows_proc), &mut state as *mut _ as LPARAM);
+    state.workerw_hwnd
+}
+
 impl WorkerWContext {
     #[cfg(windows)]
     pub fn new() -> Result<Self> {
@@ -134,44 +144,43 @@ impl WorkerWContext {
             debug!("Found Progman window handle: 0x{:X}", progman as usize);
 
             // 2. Trigger Explorer to spawn WorkerW behind SHELLDLL_DefView
-            let mut result: usize = 0;
-            let send_res = SendMessageTimeoutW(
-                progman,
-                0x052C, // WM_SPAWN_WORKER
-                0x0000000D,
-                0,
-                SMTO_NORMAL,
-                1000,
-                &mut result,
-            );
-            if send_res == 0 {
-                warn!("SendMessageTimeoutW(0x052C) returned 0; continuing with discovery");
-            }
+            // Test combinations sequentially: (0xD, 1) -> (0, 0) -> (0xD, 0)
+            let combinations: [(usize, isize); 3] = [
+                (0x0000000D, 1), // Win 10 22H2 / Modern
+                (0, 0),          // Classic Aero
+                (0x0000000D, 0), // Fallback
+            ];
 
-            // 3. Dual-topology WorkerW discovery
             let mut target_workerw: HWND = std::ptr::null_mut();
-
-            // Topology A: Windows 11 24H2+ (WorkerW as direct child of Progman)
-            let child_workerw = FindWindowExW(progman, std::ptr::null_mut(), to_wide("WorkerW").as_ptr(), std::ptr::null());
-            if !child_workerw.is_null() {
-                info!("Found WorkerW as direct child of Progman (Windows 11 24H2+ topology: 0x{:X})", child_workerw as usize);
-                target_workerw = child_workerw;
-            } else {
-                // Topology B: Classic Windows 10 & Windows 11 < 24H2 (WorkerW as sibling via EnumWindows)
-                let mut state = EnumState { workerw_hwnd: std::ptr::null_mut() };
-                EnumWindows(Some(enum_windows_proc), &mut state as *mut _ as LPARAM);
-                if !state.workerw_hwnd.is_null() {
-                    info!("Found WorkerW as sibling behind SHELLDLL_DefView (Classic topology: 0x{:X})", state.workerw_hwnd as usize);
-                    target_workerw = state.workerw_hwnd;
+            for (wparam, lparam) in combinations {
+                let mut result: usize = 0;
+                let _ = SendMessageTimeoutW(
+                    progman,
+                    0x052C, // WM_SPAWN_WORKER
+                    wparam,
+                    lparam,
+                    SMTO_NORMAL,
+                    1000,
+                    &mut result,
+                );
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                target_workerw = discover_workerw(progman);
+                if !target_workerw.is_null() {
+                    info!(
+                        "WorkerW found (0x{:X}) after 0x052C with wParam=0x{:X}, lParam={}",
+                        target_workerw as usize, wparam, lparam
+                    );
+                    break;
                 }
             }
 
-            if target_workerw.is_null() {
+            let is_fallback_progman = target_workerw.is_null();
+            if is_fallback_progman {
                 warn!("Specific WorkerW not found via dual-topology discovery; falling back to Progman (0x{:X})", progman as usize);
                 target_workerw = progman;
             }
 
-            // 4. Create and attach dedicated wallpaper window on a background window thread
+            // 3. Create and attach dedicated wallpaper window on a background window thread
             let (tx, rx) = std::sync::mpsc::channel::<Result<usize>>();
             let parent_for_thread = target_workerw as usize;
 
@@ -197,11 +206,12 @@ impl WorkerWContext {
 
                 let (x, y, width, height) = crate::monitor::get_virtual_screen_bounds();
 
+                // Create window initially hidden (no WS_VISIBLE) to eliminate startup flicker
                 let hwnd = CreateWindowExW(
                     WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
                     class_name.as_ptr(),
                     to_wide("Nativis Wallpaper").as_ptr(),
-                    WS_POPUP | WS_VISIBLE,
+                    WS_POPUP,
                     x, y, width as i32, height as i32,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
@@ -214,20 +224,26 @@ impl WorkerWContext {
                     return;
                 }
 
-                // Attach to WorkerW
-                SetParent(hwnd, parent_for_thread as HWND);
-
-                // Convert style to WS_CHILD and remove WS_POPUP
+                // Convert style to WS_CHILD before SetParent
                 let current_style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-                let new_style = (current_style & !(WS_POPUP as isize)) | (WS_CHILD as isize) | (WS_VISIBLE as isize);
+                let new_style = (current_style & !(WS_POPUP as isize)) | (WS_CHILD as isize);
                 SetWindowLongPtrW(hwnd, GWL_STYLE, new_style);
 
-                // Position window covering entire virtual screen bounds
+                // Attach to WorkerW or Progman
+                SetParent(hwnd, parent_for_thread as HWND);
+
+                // Position window covering entire virtual screen bounds and make visible
+                let (insert_after, insert_flags) = if is_fallback_progman {
+                    (HWND_BOTTOM, SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW)
+                } else {
+                    (std::ptr::null_mut(), SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW)
+                };
+
                 SetWindowPos(
                     hwnd,
-                    std::ptr::null_mut(),
+                    insert_after,
                     0, 0, width as i32, height as i32,
-                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
+                    insert_flags,
                 );
 
                 // Register display power and session notifications + WinEvent hook

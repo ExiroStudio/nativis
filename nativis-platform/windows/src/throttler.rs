@@ -17,7 +17,7 @@ use windows::{
         UI::{
             Shell::{SHQueryUserNotificationState, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN},
             WindowsAndMessaging::{
-                GetForegroundWindow, GetSystemMetrics, GetWindowRect, IsIconic,
+                FindWindowExW, GetClassNameW, GetForegroundWindow, GetShellWindow, GetSystemMetrics, GetWindowRect, IsIconic,
                 SM_CMONITORS, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
                 SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
                 WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
@@ -136,6 +136,40 @@ impl ThrottlerState {
 
             // If foreground is desktop, workerw, or null -> desktop is visible!
             if fg_val == 0 || fg_val == wp_val || fg_val == progman_val || fg_val == workerw_val {
+                self.set_resumed();
+                return;
+            }
+
+            // Shell Window (Progman / Explorer desktop root)
+            let shell_win = GetShellWindow();
+            if fg == shell_win {
+                self.set_resumed();
+                return;
+            }
+
+            // Whitelist desktop shell classes: WorkerW, Progman, and Taskbar
+            let mut class_buf = [0u16; 64];
+            let len = GetClassNameW(fg, &mut class_buf);
+            if len > 0 {
+                let class_name = String::from_utf16_lossy(&class_buf[..len as usize]);
+                if class_name == "WorkerW"
+                    || class_name == "Progman"
+                    || class_name == "Shell_TrayWnd"
+                    || class_name == "Shell_SecondaryTrayWnd"
+                {
+                    self.set_resumed();
+                    return;
+                }
+            }
+
+            // Check if foreground window contains SHELLDLL_DefView (desktop icon container)
+            let defview = FindWindowExW(
+                fg,
+                HWND::default(),
+                windows::core::w!("SHELLDLL_DefView"),
+                windows::core::PCWSTR::null(),
+            );
+            if defview.is_ok() {
                 self.set_resumed();
                 return;
             }

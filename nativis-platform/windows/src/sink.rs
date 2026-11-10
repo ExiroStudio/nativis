@@ -68,9 +68,20 @@ impl FrameSink for WindowsDirectSink {
         #[cfg(windows)]
         {
             if self.throttler.is_paused() {
-                // Throttled: drop GPU upload and sleep a bit to keep CPU at 0.00%
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                return Ok(());
+                // Throttled: wait in 50ms intervals until resumed so the frame is not dropped (essential for static images)
+                while self.throttler.is_paused() {
+                    if self.wallpaper_hwnd != 0 {
+                        let is_alive = unsafe {
+                            windows::Win32::UI::WindowsAndMessaging::IsWindow(
+                                windows::Win32::Foundation::HWND(self.wallpaper_hwnd as *mut _),
+                            ).as_bool()
+                        };
+                        if !is_alive {
+                            return Ok(());
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
             }
 
             let renderer_lock = match &self.renderer {
