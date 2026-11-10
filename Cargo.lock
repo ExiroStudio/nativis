@@ -2963,6 +2963,7 @@ dependencies = [
  "nativis-platform-kde",
  "nativis-platform-kde-wayland",
  "nativis-platform-wayland",
+ "nativis-platform-windows",
  "nativis-plugin",
  "nativis-plugin-image",
  "nativis-plugin-video",
@@ -3068,6 +3069,16 @@ dependencies = [
  "wayland-protocols",
  "wayland-protocols-wlr",
  "wgpu 22.1.0",
+]
+
+[[package]]
+name = "nativis-platform-windows"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "nativis-core",
+ "tracing",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

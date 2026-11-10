@@ -19,10 +19,10 @@ members = [
     "plugins/image_backend",
     "plugins/video_backend",
 
-    # Platform (KDE Plasma X11, KDE Plasma Wayland, Generic Wayland Layer-Shell)
+    # Platform (KDE Plasma X11, KDE Plasma Wayland, Generic Wayland Layer-Shell, Windows)
     "nativis-platform/kde-x11/plasma-plugin", "nativis-platform/kde-x11/platform",
     "nativis-platform/kde-wayland/plasma-plugin", "nativis-platform/kde-wayland/platform",
-    "nativis-platform/wayland", "xtask",
+    "nativis-platform/wayland", "nativis-platform/windows", "xtask",
 ]
 
 [workspace.package]
@@ -87,6 +87,7 @@ nativis-plugin-video = { path = "plugins/video_backend" }
 nativis-platform-kde = { path = "nativis-platform/kde-x11/platform" }
 nativis-platform-kde-wayland = { path = "nativis-platform/kde-wayland/platform" }
 nativis-platform-wayland = { path = "nativis-platform/wayland" }
+nativis-platform-windows = { path = "nativis-platform/windows" }
 
 # ── Binary (nativis-cli placeholder) ─────────────────────────────────────────
 [package]
@@ -118,6 +119,7 @@ nativis-platform-wayland = { workspace = true }
 nativis-transport-shm = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+nativis-platform-windows = { workspace = true }
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_System_Pipes",

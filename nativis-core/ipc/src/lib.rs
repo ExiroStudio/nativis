@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+#[cfg(unix)]
+use std::path::Path;
 use anyhow::{Context, Result};
 use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]

@@ -16,6 +16,8 @@ use nativis_plugin::PluginManager;
 use nativis_plugin_image::ImageBackend;
 use nativis_runtime::{Runtime, RuntimeCommand, RuntimeConfig};
 
+use nativis_core::platform::Platform;
+
 #[cfg(not(target_os = "windows"))]
 use nativis_platform_kde::KdePlatform;
 #[cfg(not(target_os = "windows"))]
@@ -25,8 +27,8 @@ use nativis_platform_wayland::WaylandPlatform;
 #[cfg(not(target_os = "windows"))]
 use nativis_plugin_video::VideoBackend;
 
-#[cfg(not(target_os = "windows"))]
-use nativis_core::platform::Platform;
+#[cfg(target_os = "windows")]
+use nativis_platform_windows::WindowsPlatform;
 
 #[cfg(not(target_os = "windows"))]
 fn create_platform() -> Box<dyn Platform> {
@@ -49,6 +51,12 @@ fn create_platform() -> Box<dyn Platform> {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn create_platform() -> Box<dyn Platform> {
+    info!("Selected Windows Platform Adapter (WorkerW Desktop Injection)");
+    Box::new(WindowsPlatform::new())
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
@@ -56,18 +64,10 @@ fn main() -> Result<()> {
 
     // 1. Check for platform reinstallation
     if args.iter().any(|a| a == "--reinstall-platform") {
-        #[cfg(not(target_os = "windows"))]
-        {
-            let mut platform = create_platform();
-            platform.bootstrap(true)?;
-            println!("Platform bootstrapped successfully.");
-            return Ok(());
-        }
-        #[cfg(target_os = "windows")]
-        {
-            println!("Windows platform bootstrap is not required.");
-            return Ok(());
-        }
+        let mut platform = create_platform();
+        platform.bootstrap(true)?;
+        println!("Platform bootstrapped successfully.");
+        return Ok(());
     }
 
     // 2. CLI commands
@@ -242,16 +242,10 @@ fn run_daemon(initial_wallpaper: Option<&str>) -> Result<()> {
     let (command_tx, command_rx) = unbounded::<RuntimeCommand>();
 
     // 1. Initialize Platform Sink
-    #[cfg(not(target_os = "windows"))]
     let sink = {
         let mut platform = create_platform();
         platform.bootstrap(false)?;
         platform.create_sink(&resources)?
-    };
-
-    #[cfg(target_os = "windows")]
-    let sink = {
-        panic!("Windows platform is not fully implemented yet");
     };
 
     // 2. Start IPC Server Listener
