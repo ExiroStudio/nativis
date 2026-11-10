@@ -23,6 +23,7 @@ members = [
     "nativis-platform/kde-x11/plasma-plugin", "nativis-platform/kde-x11/platform",
     "nativis-platform/kde-wayland/plasma-plugin", "nativis-platform/kde-wayland/platform",
     "nativis-platform/wayland", "nativis-platform/windows", "xtask",
+    "tools/windows-bootstrapper",
 ]
 
 [workspace.package]

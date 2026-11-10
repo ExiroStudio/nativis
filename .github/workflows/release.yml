@@ -130,22 +130,36 @@ jobs:
         run: cargo build --release --bin nativis --target x86_64-pc-windows-msvc --features video
 
       - name: Prepare Single Binary Release Asset
-        shell: bash
+        shell: pwsh
         run: |
-          mkdir -p dist
-          cp target/x86_64-pc-windows-msvc/release/nativis.exe dist/nativis-windows-x86_64.exe
-          cp target/x86_64-pc-windows-msvc/release/nativis.exe dist/nativis.exe
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path "target\package-windows" | Out-Null
+          Copy-Item "target\x86_64-pc-windows-msvc\release\nativis.exe" "target\package-windows\nativis.exe"
+          Copy-Item "$env:FFMPEG_DIR\bin\*.dll" "target\package-windows\"
 
-          # Bundle FFmpeg runtime DLLs for portable execution
-          cp "$FFMPEG_DIR"/bin/*.dll dist/
+          # Package compressed payload tar.gz
+          tar -czf target\payload.tar.gz -C target\package-windows .
 
-          cd dist
-          # Package complete standalone zip archive with nativis.exe and all required DLLs
-          7z a nativis-windows-x86_64.zip nativis.exe *.dll
-          rm nativis.exe *.dll
-          sha256sum nativis-windows-x86_64.exe > nativis-windows-x86_64.exe.sha256
-          sha256sum nativis-windows-x86_64.zip > nativis-windows-x86_64.zip.sha256
-          cd ..
+          # Build the single-file bootstrapper embedding the payload
+          $payloadAbs = (Resolve-Path "target\payload.tar.gz").Path
+          Write-Host "Building nativis-bootstrapper with NATIVIS_PAYLOAD=$payloadAbs"
+          $env:NATIVIS_PAYLOAD = $payloadAbs
+          cargo build --release -p nativis-bootstrapper --target x86_64-pc-windows-msvc
+
+          New-Item -ItemType Directory -Force -Path "dist" | Out-Null
+          # Single portable executable embedding all dependencies
+          Copy-Item "target\x86_64-pc-windows-msvc\release\nativis-bootstrapper.exe" "dist\nativis-windows-x86_64.exe"
+
+          # Also package complete standalone zip archive for portable folder usage
+          Set-Location "target\package-windows"
+          7z a "..\..\dist\nativis-windows-x86_64.zip" nativis.exe *.dll
+          Set-Location "..\.."
+
+          # Generate SHA-256 checksums
+          Set-Location "dist"
+          Get-FileHash -Algorithm SHA256 "nativis-windows-x86_64.exe" | ForEach-Object { "$($_.Hash.ToLower())  nativis-windows-x86_64.exe" } | Set-Content "nativis-windows-x86_64.exe.sha256"
+          Get-FileHash -Algorithm SHA256 "nativis-windows-x86_64.zip" | ForEach-Object { "$($_.Hash.ToLower())  nativis-windows-x86_64.zip" } | Set-Content "nativis-windows-x86_64.zip.sha256"
+          Set-Location ".."
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4

@@ -2986,6 +2986,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nativis-bootstrapper"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "tar",
+ "tempfile",
+]
+
+[[package]]
 name = "nativis-core"
 version = "0.1.0"
 dependencies = [

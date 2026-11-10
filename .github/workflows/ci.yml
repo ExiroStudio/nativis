@@ -96,4 +96,4 @@ jobs:
         run: cargo check --bin nativis --target x86_64-pc-windows-msvc --features video
 
       - name: Cargo Test Windows Platform & Core
-        run: cargo test -p nativis-platform-windows -p nativis-ipc -p nativis-core --target x86_64-pc-windows-msvc
+        run: cargo test -p nativis-platform-windows -p nativis-ipc -p nativis-core -p nativis-bootstrapper --target x86_64-pc-windows-msvc
