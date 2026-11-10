@@ -368,6 +368,14 @@ impl D3D11Renderer {
         Ok(())
     }
 
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
     pub fn draw_nv12(
         &mut self,
         y_data: &[u8],

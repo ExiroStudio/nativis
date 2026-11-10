@@ -9,11 +9,13 @@ pub mod workerw;
 pub mod sink;
 pub mod d3d11_renderer;
 pub mod throttler;
+pub mod monitor;
 
 pub use workerw::WorkerWContext;
 pub use sink::WindowsDirectSink;
 pub use d3d11_renderer::D3D11Renderer;
 pub use throttler::{Throttler, PauseReason};
+pub use monitor::*;
 
 pub struct WindowsPlatform {
     workerw: Option<WorkerWContext>,
@@ -34,6 +36,7 @@ impl Default for WindowsPlatform {
 impl Platform for WindowsPlatform {
     fn bootstrap(&mut self, _force: bool) -> Result<()> {
         info!("Bootstrapping WindowsPlatform (WorkerW Desktop Injection)...");
+        crate::monitor::enable_dpi_awareness_v2();
         let ctx = WorkerWContext::new().context("Failed to initialize WorkerW context")?;
         self.workerw = Some(ctx);
         info!("WindowsPlatform bootstrap complete.");

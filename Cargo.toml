@@ -95,6 +95,10 @@ name    = "nativis"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+video = ["nativis-plugin-video"]
+
 [dependencies]
 tracing-subscriber   = { workspace = true }
 tracing              = { workspace = true }
@@ -120,6 +124,7 @@ nativis-transport-shm = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 nativis-platform-windows = { workspace = true }
+nativis-plugin-video = { workspace = true, optional = true }
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_System_Pipes",
@@ -127,3 +132,11 @@ windows-sys = { workspace = true, features = [
     "Win32_Security",
     "Win32_Storage_FileSystem",
 ] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+

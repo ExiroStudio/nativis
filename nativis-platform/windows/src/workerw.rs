@@ -96,6 +96,18 @@ unsafe extern "system" fn wallpaper_wndproc(
             crate::throttler::on_session_change(wparam as usize);
             0
         }
+        WM_DISPLAYCHANGE | WM_DPICHANGED => {
+            let (_vx, _vy, vcx, vcy) = crate::monitor::get_virtual_screen_bounds();
+            debug!("Display configuration or DPI changed. Resizing wallpaper window to {}x{}", vcx, vcy);
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                0, 0, vcx as i32, vcy as i32,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
+            );
+            crate::throttler::on_display_changed();
+            0
+        }
         WM_DESTROY => {
             PostQuitMessage(0);
             0
@@ -108,6 +120,10 @@ impl WorkerWContext {
     #[cfg(windows)]
     pub fn new() -> Result<Self> {
         info!("Initializing Windows WorkerW desktop injection...");
+
+        // 0. Enumerate monitors and log details at startup
+        let monitors = crate::monitor::enumerate_monitors();
+        info!("Found {} active display monitor(s)", monitors.len());
 
         unsafe {
             // 1. Locate Progman window
@@ -179,17 +195,14 @@ impl WorkerWContext {
                 };
                 RegisterClassExW(&wnd_class);
 
-                let x = GetSystemMetrics(SM_XVIRTUALSCREEN);
-                let y = GetSystemMetrics(SM_YVIRTUALSCREEN);
-                let width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-                let height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                let (x, y, width, height) = crate::monitor::get_virtual_screen_bounds();
 
                 let hwnd = CreateWindowExW(
                     WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
                     class_name.as_ptr(),
                     to_wide("Nativis Wallpaper").as_ptr(),
                     WS_POPUP | WS_VISIBLE,
-                    x, y, width, height,
+                    x, y, width as i32, height as i32,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
                     hinstance,
@@ -213,7 +226,7 @@ impl WorkerWContext {
                 SetWindowPos(
                     hwnd,
                     std::ptr::null_mut(),
-                    0, 0, width, height,
+                    0, 0, width as i32, height as i32,
                     SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
                 );
 
@@ -260,10 +273,7 @@ impl WorkerWContext {
                 }
             });
 
-            let screen_cx = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-            let screen_cy = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-            let width = if screen_cx > 0 { screen_cx as u32 } else { 1920 };
-            let height = if screen_cy > 0 { screen_cy as u32 } else { 1080 };
+            let (_vx, _vy, width, height) = crate::monitor::get_virtual_screen_bounds();
 
             let throttler = Arc::new(Throttler::new(
                 0,

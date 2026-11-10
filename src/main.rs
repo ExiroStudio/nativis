@@ -24,7 +24,7 @@ use nativis_platform_kde::KdePlatform;
 use nativis_platform_kde_wayland::KdeWaylandPlatform;
 #[cfg(not(target_os = "windows"))]
 use nativis_platform_wayland::WaylandPlatform;
-#[cfg(not(target_os = "windows"))]
+#[cfg(any(not(target_os = "windows"), feature = "video"))]
 use nativis_plugin_video::VideoBackend;
 
 #[cfg(target_os = "windows")]
@@ -262,7 +262,7 @@ fn run_daemon(initial_wallpaper: Option<&str>) -> Result<()> {
 
     let mut plugin_manager = PluginManager::new();
     plugin_manager.register("image_backend", || Box::new(ImageBackend::new()));
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(any(not(target_os = "windows"), feature = "video"))]
     plugin_manager.register("video_backend", || Box::new(VideoBackend::new()));
 
     let mut backend = plugin_manager

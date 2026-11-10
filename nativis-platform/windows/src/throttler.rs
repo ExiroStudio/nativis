@@ -267,6 +267,13 @@ pub fn on_session_change(wparam: usize) {
 }
 
 #[cfg(windows)]
+pub fn on_display_changed() {
+    if let Some(state) = GLOBAL_THROTTLER.read().as_ref() {
+        state.evaluate();
+    }
+}
+
+#[cfg(windows)]
 pub unsafe extern "system" fn winevent_proc(
     _hwineventhook: windows::Win32::UI::Accessibility::HWINEVENTHOOK,
     _event: u32,

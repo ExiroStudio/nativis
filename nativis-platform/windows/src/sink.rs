@@ -80,9 +80,22 @@ impl FrameSink for WindowsDirectSink {
 
             let mut renderer = renderer_lock.lock();
 
-            // 1. Adjust swapchain buffers if screen size changed
-            if frame.width > 0 && frame.height > 0 {
-                let _ = renderer.resize(frame.width, frame.height);
+            // 1. Adjust swapchain buffers if window dimensions changed
+            if self.wallpaper_hwnd != 0 {
+                let mut rc: windows::Win32::Foundation::RECT = unsafe { std::mem::zeroed() };
+                let ok = unsafe {
+                    windows::Win32::UI::WindowsAndMessaging::GetClientRect(
+                        windows::Win32::Foundation::HWND(self.wallpaper_hwnd as *mut _),
+                        &mut rc,
+                    )
+                };
+                if ok.is_ok() {
+                    let win_w = (rc.right - rc.left) as u32;
+                    let win_h = (rc.bottom - rc.top) as u32;
+                    if win_w > 0 && win_h > 0 && (win_w != renderer.width() || win_h != renderer.height()) {
+                        let _ = renderer.resize(win_w, win_h);
+                    }
+                }
             }
 
             // 2. Acquire frame resource and render
