@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+#[cfg(unix)]
+use std::path::Path;
 use anyhow::{Context, Result};
+use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
-#[cfg(unix)]
-use std::io::{BufRead, BufReader, Write};
 
 pub mod config;
 pub use config::UserConfig;
@@ -202,7 +203,19 @@ pub fn is_daemon_running() -> bool {
         }
         UnixStream::connect(socket_path).is_ok()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::fs::OpenOptions;
+        let pipe_path = get_socket_path();
+        match OpenOptions::new().read(true).write(true).open(&pipe_path) {
+            Ok(_) => true,
+            Err(e) => {
+                // In Windows, ERROR_PIPE_BUSY (231) means the pipe daemon is running!
+                e.raw_os_error() == Some(231)
+            }
+        }
+    }
+    #[cfg(all(not(unix), not(windows)))]
     {
         false
     }
@@ -230,7 +243,48 @@ pub fn send_command(cmd: &IpcCommand) -> Result<IpcResponse> {
 
         Ok(response)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::fs::OpenOptions;
+        use std::os::windows::ffi::OsStrExt;
+        let pipe_path = get_socket_path();
+
+        let mut attempts = 0;
+        let stream = loop {
+            match OpenOptions::new().read(true).write(true).open(&pipe_path) {
+                Ok(file) => break file,
+                Err(e) if e.raw_os_error() == Some(231) && attempts < 10 => {
+                    attempts += 1;
+                    let wide_path: Vec<u16> = pipe_path.as_os_str().encode_wide().chain(Some(0)).collect();
+                    unsafe {
+                        windows_sys::Win32::System::Pipes::WaitNamedPipeW(wide_path.as_ptr(), 500);
+                    }
+                }
+                Err(e) => {
+                    return Err(e).with_context(|| format!("Failed to connect to daemon pipe at {:?}", pipe_path));
+                }
+            }
+        };
+
+        let stream_reader = stream.try_clone()
+            .with_context(|| "Failed to clone pipe handle for reading")?;
+
+        let mut payload = serde_json::to_string(cmd)?;
+        payload.push('\n');
+        let mut writer = stream;
+        writer.write_all(payload.as_bytes())?;
+        writer.flush()?;
+
+        let mut reader = BufReader::new(stream_reader);
+        let mut response_line = String::new();
+        reader.read_line(&mut response_line)?;
+
+        let response: IpcResponse = serde_json::from_str(&response_line)
+            .with_context(|| format!("Invalid response from daemon: {}", response_line))?;
+
+        Ok(response)
+    }
+    #[cfg(all(not(unix), not(windows)))]
     {
         anyhow::bail!("IPC not supported on this platform yet");
     }

@@ -8,6 +8,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Direct3D 11 GPU texture reference for zero-copy rendering on Windows.
+pub struct D3D11GpuFrame {
+    pub texture_ptr: usize,
+    pub subresource_index: u32,
+    pub frame_ref: Option<Arc<dyn std::any::Any + Send + Sync>>,
+}
+
 /// A single video frame that has been decoded to NV12 planar format.
 ///
 /// Immutable after creation. The decoder has no further interaction with it.
@@ -34,6 +41,8 @@ pub struct DecodedFrame {
     pub uv_stride:     u32,
     /// Height of the chroma plane: ceil(height / 2).
     pub chroma_height: u32,
+    /// Direct3D 11 GPU texture reference (VRAM zero-copy on Windows).
+    pub d3d11_texture: Option<Arc<D3D11GpuFrame>>,
 }
 
 impl DecodedFrame {

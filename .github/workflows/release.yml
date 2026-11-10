@@ -87,9 +87,49 @@ jobs:
           path: dist/*
           retention-days: 7
 
+  build-windows:
+    name: Build Windows Single Binary (x86_64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ runner.os }}-cargo-release
+
+      - name: Build Standalone Windows Binary
+        run: cargo build --release --bin nativis --target x86_64-pc-windows-msvc
+
+      - name: Prepare Single Binary Release Asset
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/x86_64-pc-windows-msvc/release/nativis.exe dist/nativis-windows-x86_64.exe
+
+          cd dist
+          7z a nativis-windows-x86_64.zip nativis-windows-x86_64.exe
+          sha256sum nativis-windows-x86_64.exe > nativis-windows-x86_64.exe.sha256
+          sha256sum nativis-windows-x86_64.zip > nativis-windows-x86_64.zip.sha256
+          cd ..
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nativis-windows-x86_64-binary
+          path: dist/*
+          retention-days: 7
+
   release:
     name: Publish GitHub Release
-    needs: build-linux
+    needs: [build-linux, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -97,10 +137,16 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Download Artifacts
+      - name: Download Linux Artifacts
         uses: actions/download-artifact@v4
         with:
           name: nativis-linux-x86_64-binary
+          path: dist
+
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: nativis-windows-x86_64-binary
           path: dist
 
       - name: Publish to GitHub Releases
@@ -111,6 +157,10 @@ jobs:
             dist/nativis-linux-x86_64.sha256
             dist/nativis-linux-x86_64.tar.gz
             dist/nativis-linux-x86_64.tar.gz.sha256
+            dist/nativis-windows-x86_64.exe
+            dist/nativis-windows-x86_64.exe.sha256
+            dist/nativis-windows-x86_64.zip
+            dist/nativis-windows-x86_64.zip.sha256
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

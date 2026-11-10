@@ -433,17 +433,29 @@ impl MediaBackend for VideoBackend {
             let width   = df.width;
             let height  = df.height;
 
-            // Register NV12 planar data — Arc::clone is refcount-only, NO memcpy.
-            let buf = PlanarBuffer {
-                format: PixelFormat::Nv12,
-                width,
-                height,
-                planes: vec![
-                    PlaneDesc { data: df.y_plane.clone(),  stride: df.y_stride },
-                    PlaneDesc { data: df.uv_plane.clone(), stride: df.uv_stride },
-                ],
+            let handle = if let Some(gpu_frame) = &df.d3d11_texture {
+                let buf = nativis_core::resource::D3D11TextureResource {
+                    texture_ptr: gpu_frame.texture_ptr,
+                    subresource_index: gpu_frame.subresource_index,
+                    width,
+                    height,
+                    format: 103, // DXGI_FORMAT_NV12
+                    keeper: gpu_frame.frame_ref.clone(),
+                };
+                resources.register(Box::new(buf))
+            } else {
+                // Register NV12 planar data — Arc::clone is refcount-only, NO memcpy.
+                let buf = PlanarBuffer {
+                    format: PixelFormat::Nv12,
+                    width,
+                    height,
+                    planes: vec![
+                        PlaneDesc { data: df.y_plane.clone(),  stride: df.y_stride },
+                        PlaneDesc { data: df.uv_plane.clone(), stride: df.uv_stride },
+                    ],
+                };
+                resources.register(Box::new(buf))
             };
-            let handle = resources.register(Box::new(buf));
             self.last_handle = Some(handle);
 
             self.pending = Some(Frame {
@@ -626,6 +638,49 @@ fn decoder_thread(
                 let t_decode_done = Instant::now();
                 let raw_pts = raw.pts().unwrap_or(0);
 
+                #[cfg(target_os = "windows")]
+                if hardware.is_some() && raw.format() == Pixel::from(ffi::AVPixelFormat::AV_PIX_FMT_D3D11) {
+                    let cloned_frame = unsafe { ffi::av_frame_clone(raw.as_ptr()) };
+                    if !cloned_frame.is_null() {
+                        struct AvFrameKeeper(*mut ffi::AVFrame);
+                        impl Drop for AvFrameKeeper {
+                            fn drop(&mut self) {
+                                unsafe { ffi::av_frame_free(&mut self.0) };
+                            }
+                        }
+                        unsafe impl Send for AvFrameKeeper {}
+                        unsafe impl Sync for AvFrameKeeper {}
+
+                        let keeper = Arc::new(AvFrameKeeper(cloned_frame));
+                        let tex_ptr = raw.data(0) as usize;
+                        let sub_idx = raw.data(1) as usize as u32;
+
+                        let df = DecodedFrame {
+                            width: raw.width(),
+                            height: raw.height(),
+                            pts: raw_pts,
+                            time_base_num: tb.numerator(),
+                            time_base_den: tb.denominator(),
+                            y_plane: Arc::from([]),
+                            uv_plane: Arc::from([]),
+                            y_stride: 0,
+                            uv_stride: 0,
+                            chroma_height: (raw.height() + 1) / 2,
+                            d3d11_texture: Some(Arc::new(frame::D3D11GpuFrame {
+                                texture_ptr: tex_ptr,
+                                subresource_index: sub_idx,
+                                frame_ref: Some(keeper),
+                            })),
+                        };
+
+                        decode_count += 1;
+                        if tx.send(df).is_err() {
+                            break 'outer;
+                        }
+                        continue;
+                    }
+                }
+
                 let source = if let Some(state) = hardware.as_ref() {
                     if raw.format() == Pixel::from(state.pixel_format) {
                         unsafe {
@@ -735,6 +790,7 @@ fn decoder_thread(
                     y_stride,
                     uv_stride,
                     chroma_height: chroma_h,
+                    d3d11_texture: None,
                 };
 
                 total_decode_us += decode_us;
