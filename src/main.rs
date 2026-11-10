@@ -352,7 +352,83 @@ fn start_ipc_server(
     })
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn start_ipc_server(
+    command_tx: Sender<RuntimeCommand>,
+    resources: Arc<ResourceManager>,
+    current_wallpaper: Arc<RwLock<Option<String>>>,
+    is_paused: Arc<AtomicBool>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        use std::os::windows::ffi::OsStrExt;
+        use std::os::windows::io::FromRawHandle;
+        use std::io::{BufRead, BufReader, Write};
+        use windows_sys::Win32::System::Pipes::*;
+        use windows_sys::Win32::Storage::FileSystem::*;
+        use windows_sys::Win32::Foundation::*;
+
+        let pipe_path = get_socket_path();
+        let wide_path: Vec<u16> = pipe_path.as_os_str().encode_wide().chain(Some(0)).collect();
+
+        info!("Nativis Windows IPC Named Pipe server listening at {:?}", pipe_path);
+
+        loop {
+            let handle = unsafe {
+                CreateNamedPipeW(
+                    wide_path.as_ptr(),
+                    PIPE_ACCESS_DUPLEX,
+                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                    PIPE_UNLIMITED_INSTANCES,
+                    4096,
+                    4096,
+                    0,
+                    std::ptr::null(),
+                )
+            };
+
+            if handle == INVALID_HANDLE_VALUE {
+                error!("Failed to create Windows Named Pipe at {:?}: error code {}", pipe_path, unsafe { GetLastError() });
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                continue;
+            }
+
+            let connect_res = unsafe { ConnectNamedPipe(handle, std::ptr::null_mut()) };
+            let connected = connect_res != 0 || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
+
+            if !connected {
+                unsafe { CloseHandle(handle); }
+                continue;
+            }
+
+            let mut stream = unsafe { std::fs::File::from_raw_handle(handle as *mut _) };
+            let cmd_tx = command_tx.clone();
+            let res = resources.clone();
+            let cur_wp = current_wallpaper.clone();
+            let paused = is_paused.clone();
+
+            std::thread::spawn(move || {
+                let stream_reader = match stream.try_clone() {
+                    Ok(f) => f,
+                    Err(_) => return,
+                };
+                let mut reader = BufReader::new(stream_reader);
+                let mut line = String::new();
+                if reader.read_line(&mut line).is_ok() {
+                    if let Ok(cmd) = serde_json::from_str::<IpcCommand>(&line) {
+                        let resp = handle_ipc_command(cmd, &cmd_tx, &res, &cur_wp, &paused);
+                        if let Ok(resp_json) = serde_json::to_string(&resp) {
+                            let _ = stream.write_all(resp_json.as_bytes());
+                            let _ = stream.write_all(b"\n");
+                            let _ = stream.flush();
+                        }
+                    }
+                }
+            });
+        }
+    })
+}
+
+#[cfg(all(not(unix), not(windows)))]
 fn start_ipc_server(
     _command_tx: Sender<RuntimeCommand>,
     _resources: Arc<ResourceManager>,

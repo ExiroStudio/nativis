@@ -64,6 +64,9 @@ pollster = "0.3"
 parking_lot        = "0.12"
 crossbeam-channel  = "0.5"
 
+# Windows API
+windows-sys        = { version = "0.59", default-features = false }
+
 # GUI
 slint              = "1.18"
 slint-build        = "1.18"
@@ -113,3 +116,12 @@ nativis-platform-kde  = { workspace = true }
 nativis-platform-kde-wayland = { workspace = true }
 nativis-platform-wayland = { workspace = true }
 nativis-transport-shm = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+] }
