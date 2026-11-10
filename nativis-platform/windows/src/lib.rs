@@ -6,9 +6,11 @@ use tracing::info;
 
 pub mod workerw;
 pub mod sink;
+pub mod d3d11_renderer;
 
 pub use workerw::WorkerWContext;
 pub use sink::WindowsDirectSink;
+pub use d3d11_renderer::D3D11Renderer;
 
 pub struct WindowsPlatform {
     workerw: Option<WorkerWContext>,
@@ -36,8 +38,11 @@ impl Platform for WindowsPlatform {
     }
 
     fn create_sink(&self, resources: &ResourceManager) -> Result<Box<dyn FrameSink>> {
-        let hwnd = self.workerw.as_ref().map(|w| w.wallpaper_hwnd).unwrap_or(0);
-        let sink = WindowsDirectSink::new(hwnd, resources.clone());
+        let (hwnd, width, height) = self.workerw.as_ref()
+            .map(|w| (w.wallpaper_hwnd, w.width, w.height))
+            .unwrap_or((0, 1920, 1080));
+        let sink = WindowsDirectSink::new(hwnd, width, height, resources.clone())
+            .context("Failed to initialize WindowsDirectSink")?;
         Ok(Box::new(sink))
     }
 }

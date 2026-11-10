@@ -26,6 +26,8 @@ pub struct WorkerWContext {
     pub progman_hwnd: isize,
     pub workerw_hwnd: isize,
     pub wallpaper_hwnd: isize,
+    pub width: u32,
+    pub height: u32,
     #[cfg(windows)]
     thread_handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -211,15 +213,22 @@ impl WorkerWContext {
                 }
             });
 
+            let screen_cx = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+            let screen_cy = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+            let width = if screen_cx > 0 { screen_cx as u32 } else { 1920 };
+            let height = if screen_cy > 0 { screen_cy as u32 } else { 1080 };
+
             let wallpaper_hwnd = rx.recv()
                 .context("Failed to receive window handle from thread")??;
 
-            info!("WorkerW desktop injection successful. Wallpaper HWND: 0x{:X}", wallpaper_hwnd);
+            info!("WorkerW desktop injection successful. Wallpaper HWND: 0x{:X} ({}x{})", wallpaper_hwnd, width, height);
 
             Ok(Self {
                 progman_hwnd: progman as isize,
                 workerw_hwnd: target_workerw as isize,
                 wallpaper_hwnd: wallpaper_hwnd as isize,
+                width,
+                height,
                 thread_handle: Some(thread_handle),
             })
         }
