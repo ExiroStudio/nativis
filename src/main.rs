@@ -447,7 +447,7 @@ fn handle_ipc_command(
 
             let mut plugin_manager = PluginManager::new();
             plugin_manager.register("image_backend", || Box::new(ImageBackend::new()));
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(any(not(target_os = "windows"), feature = "video"))]
             plugin_manager.register("video_backend", || Box::new(VideoBackend::new()));
 
             let mut backend = match plugin_manager.open(&asset_path) {

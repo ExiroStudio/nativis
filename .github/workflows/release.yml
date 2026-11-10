@@ -105,17 +105,36 @@ jobs:
         with:
           key: ${{ runner.os }}-cargo-release
 
+      - name: Install FFmpeg Development Libraries (Windows MSVC)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
+          Write-Host "Downloading FFmpeg shared build from $url..."
+          Invoke-WebRequest -Uri $url -OutFile "ffmpeg.zip"
+          Expand-Archive -Path "ffmpeg.zip" -DestinationPath "C:\ffmpeg"
+          $extractedDir = Get-ChildItem -Path "C:\ffmpeg" -Directory | Select-Object -First 1 -ExpandProperty FullName
+          Write-Host "Setting FFMPEG_DIR=$extractedDir"
+          echo "FFMPEG_DIR=$extractedDir" >> $env:GITHUB_ENV
+          echo "$extractedDir\bin" >> $env:GITHUB_PATH
+
       - name: Build Standalone Windows Binary
-        run: cargo build --release --bin nativis --target x86_64-pc-windows-msvc
+        run: cargo build --release --bin nativis --target x86_64-pc-windows-msvc --features video
 
       - name: Prepare Single Binary Release Asset
         shell: bash
         run: |
           mkdir -p dist
           cp target/x86_64-pc-windows-msvc/release/nativis.exe dist/nativis-windows-x86_64.exe
+          cp target/x86_64-pc-windows-msvc/release/nativis.exe dist/nativis.exe
+
+          # Bundle FFmpeg runtime DLLs for portable execution
+          cp "$FFMPEG_DIR"/bin/*.dll dist/
 
           cd dist
-          7z a nativis-windows-x86_64.zip nativis-windows-x86_64.exe
+          # Package complete standalone zip archive with nativis.exe and all required DLLs
+          7z a nativis-windows-x86_64.zip nativis.exe *.dll
+          rm nativis.exe *.dll
           sha256sum nativis-windows-x86_64.exe > nativis-windows-x86_64.exe.sha256
           sha256sum nativis-windows-x86_64.zip > nativis-windows-x86_64.zip.sha256
           cd ..
