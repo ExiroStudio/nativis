@@ -15,23 +15,25 @@ use windows::{
                 Fxc::{D3DCompile, D3DCOMPILE_ENABLE_STRICTNESS, D3DCOMPILE_OPTIMIZATION_LEVEL3},
                 ID3DBlob, D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_11_0,
                 D3D_FEATURE_LEVEL_11_1, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+                D3D11_SRV_DIMENSION_TEXTURE2D,
             },
             Direct3D11::{
-                D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11PixelShader,
-                ID3D11RenderTargetView, ID3D11SamplerState, ID3D11ShaderResourceView,
-                ID3D11Texture2D, ID3D11VertexShader,
+                D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread,
+                ID3D11PixelShader, ID3D11RenderTargetView, ID3D11SamplerState,
+                ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11VertexShader,
                 D3D11_BIND_SHADER_RESOURCE, D3D11_COMPARISON_NEVER,
                 D3D11_CPU_ACCESS_WRITE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
                 D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_FLOAT32_MAX, D3D11_MAP_WRITE_DISCARD,
                 D3D11_MAPPED_SUBRESOURCE, D3D11_SAMPLER_DESC, D3D11_SDK_VERSION,
-                D3D11_TEXTURE2D_DESC, D3D11_TEXTURE_ADDRESS_CLAMP,
-                D3D11_USAGE_DYNAMIC, D3D11_VIEWPORT,
+                D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_TEXTURE2D_DESC,
+                D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_USAGE_DEFAULT, D3D11_USAGE_DYNAMIC,
+                D3D11_VIEWPORT,
             },
             Dxgi::{
                 Common::{
                     DXGI_ALPHA_MODE_UNSPECIFIED, DXGI_FORMAT_B8G8R8A8_UNORM,
-                    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
-                    DXGI_SAMPLE_DESC,
+                    DXGI_FORMAT_NV12, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8_UNORM,
+                    DXGI_FORMAT_R8_UNORM, DXGI_SAMPLE_DESC,
                 },
                 IDXGIAdapter, IDXGIDevice, IDXGIFactory2, IDXGISwapChain1,
                 DXGI_MWA_NO_ALT_ENTER, DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
@@ -155,6 +157,13 @@ pub struct D3D11Renderer {
     last_rgba_w: u32,
     last_rgba_h: u32,
 
+    // Zero-Copy NV12 GPU texture & SRVs
+    nv12_gpu_texture: Option<ID3D11Texture2D>,
+    nv12_gpu_y_srv: Option<ID3D11ShaderResourceView>,
+    nv12_gpu_uv_srv: Option<ID3D11ShaderResourceView>,
+    last_zero_copy_w: u32,
+    last_zero_copy_h: u32,
+
     width: u32,
     height: u32,
 }
@@ -187,6 +196,12 @@ impl D3D11Renderer {
 
             let device = device_opt.context("D3D11Device was null")?;
             let context = context_opt.context("D3D11DeviceContext was null")?;
+
+            // Enable multithread protection for concurrent decode and render threads
+            if let Ok(multithread) = context.cast::<ID3D11Multithread>() {
+                let _ = multithread.SetMultithreadProtected(true);
+                info!("Direct3D 11 Multithread protection enabled on device context");
+            }
 
             info!("Direct3D 11 device created successfully (Feature Level: {:?})", feature_level);
 
@@ -302,6 +317,11 @@ impl D3D11Renderer {
                 rgba_srv: None,
                 last_rgba_w: 0,
                 last_rgba_h: 0,
+                nv12_gpu_texture: None,
+                nv12_gpu_y_srv: None,
+                nv12_gpu_uv_srv: None,
+                last_zero_copy_w: 0,
+                last_zero_copy_h: 0,
                 width,
                 height,
             })
@@ -513,6 +533,86 @@ impl D3D11Renderer {
             self.context.Draw(3, 0);
         }
 
+        Ok(())
+    }
+
+    pub fn device(&self) -> ID3D11Device {
+        self.device.clone()
+    }
+
+    pub fn context(&self) -> ID3D11DeviceContext {
+        self.context.clone()
+    }
+
+    pub fn draw_d3d11_texture(
+        &mut self,
+        src_texture: &ID3D11Texture2D,
+        subresource_index: u32,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        unsafe {
+            // 1. Recreate NV12 staging texture and SRVs if video size changed
+            if self.last_zero_copy_w != width || self.last_zero_copy_h != height || self.nv12_gpu_texture.is_none() {
+                let desc = D3D11_TEXTURE2D_DESC {
+                    Width: width,
+                    Height: height,
+                    MipLevels: 1,
+                    ArraySize: 1,
+                    Format: DXGI_FORMAT_NV12,
+                    SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    Usage: D3D11_USAGE_DEFAULT,
+                    BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                    CPUAccessFlags: 0,
+                    MiscFlags: 0,
+                };
+                let mut tex: Option<ID3D11Texture2D> = None;
+                self.device.CreateTexture2D(&desc, None, Some(&mut tex))?;
+                let texture = tex.unwrap();
+
+                let mut y_srv_desc = D3D11_SHADER_RESOURCE_VIEW_DESC::default();
+                y_srv_desc.Format = DXGI_FORMAT_R8_UNORM;
+                y_srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                y_srv_desc.Anonymous.Texture2D.MostDetailedMip = 0;
+                y_srv_desc.Anonymous.Texture2D.MipLevels = 1;
+                let mut y_srv: Option<ID3D11ShaderResourceView> = None;
+                self.device.CreateShaderResourceView(&texture, Some(&y_srv_desc), Some(&mut y_srv))?;
+
+                let mut uv_srv_desc = D3D11_SHADER_RESOURCE_VIEW_DESC::default();
+                uv_srv_desc.Format = DXGI_FORMAT_R8G8_UNORM;
+                uv_srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                uv_srv_desc.Anonymous.Texture2D.MostDetailedMip = 0;
+                uv_srv_desc.Anonymous.Texture2D.MipLevels = 1;
+                let mut uv_srv: Option<ID3D11ShaderResourceView> = None;
+                self.device.CreateShaderResourceView(&texture, Some(&uv_srv_desc), Some(&mut uv_srv))?;
+
+                self.nv12_gpu_texture = Some(texture);
+                self.nv12_gpu_y_srv = y_srv;
+                self.nv12_gpu_uv_srv = uv_srv;
+                self.last_zero_copy_w = width;
+                self.last_zero_copy_h = height;
+            }
+
+            // 2. Hardware GPU DMA copy (VRAM to VRAM) from decoder slice to our texture
+            let dst_tex = self.nv12_gpu_texture.as_ref().unwrap();
+            self.context.CopySubresourceRegion(
+                dst_tex,
+                0,
+                0, 0, 0,
+                src_texture,
+                subresource_index,
+                None,
+            );
+
+            // 3. Render NV12 using BT.709 pixel shader
+            self.context.OMSetRenderTargets(Some(&[self.render_target_view.clone()]), None);
+            self.context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            self.context.VSSetShader(&self.vertex_shader, None);
+            self.context.PSSetShader(&self.pixel_shader_nv12, None);
+            self.context.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
+            self.context.PSSetShaderResources(0, Some(&[self.nv12_gpu_y_srv.clone(), self.nv12_gpu_uv_srv.clone()]));
+            self.context.Draw(3, 0);
+        }
         Ok(())
     }
 

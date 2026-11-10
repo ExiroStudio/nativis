@@ -7,7 +7,7 @@ use crate::throttler::Throttler;
 #[cfg(windows)]
 use anyhow::Context;
 #[cfg(windows)]
-use nativis_core::resource::{CpuBuffer, PlanarBuffer};
+use nativis_core::resource::{CpuBuffer, D3D11TextureResource, PlanarBuffer};
 #[cfg(windows)]
 use parking_lot::Mutex;
 #[cfg(windows)]
@@ -87,8 +87,28 @@ impl FrameSink for WindowsDirectSink {
 
             // 2. Acquire frame resource and render
             let success = self.resources.acquire(frame.resource, |res| {
+                // Zero-Copy Direct3D 11 VRAM Texture Path
+                if let Some(gpu) = res.as_any().downcast_ref::<D3D11TextureResource>() {
+                    let ptr = gpu.texture_ptr as *mut std::ffi::c_void;
+                    if ptr.is_null() {
+                        return false;
+                    }
+                    let tex: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D = unsafe {
+                        std::mem::transmute(&ptr)
+                    };
+                    if let Err(e) = renderer.draw_d3d11_texture(
+                        tex,
+                        gpu.subresource_index,
+                        gpu.width,
+                        gpu.height,
+                    ) {
+                        warn!("D3D11 draw_d3d11_texture error: {}", e);
+                        return false;
+                    }
+                    true
+                }
                 // NV12 Multi-plane Video path
-                if let Some(planar) = res.as_any().downcast_ref::<PlanarBuffer>() {
+                else if let Some(planar) = res.as_any().downcast_ref::<PlanarBuffer>() {
                     if planar.planes.len() < 2 {
                         return false;
                     }
