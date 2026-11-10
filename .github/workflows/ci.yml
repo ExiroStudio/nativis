@@ -81,6 +81,14 @@ jobs:
           Expand-Archive -Path "ffmpeg.zip" -DestinationPath "C:\ffmpeg"
           $extractedDir = Get-ChildItem -Path "C:\ffmpeg" -Directory | Select-Object -First 1 -ExpandProperty FullName
           Write-Host "Setting FFMPEG_DIR=$extractedDir"
+
+          # Remove hwcontext_cuda.h to prevent bindgen failure with un-stubbed CUarray in FFmpeg master
+          $cudaH = Join-Path $extractedDir "include\libavutil\hwcontext_cuda.h"
+          if (Test-Path $cudaH) {
+              Write-Host "Removing $cudaH to avoid CUDA SDK dependency in bindgen..."
+              Remove-Item $cudaH -Force
+          }
+
           echo "FFMPEG_DIR=$extractedDir" >> $env:GITHUB_ENV
           echo "$extractedDir\bin" >> $env:GITHUB_PATH
 
