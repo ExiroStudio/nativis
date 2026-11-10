@@ -652,8 +652,9 @@ fn decoder_thread(
                         unsafe impl Sync for AvFrameKeeper {}
 
                         let keeper = Arc::new(AvFrameKeeper(cloned_frame));
-                        let tex_ptr = raw.data(0) as usize;
-                        let sub_idx = raw.data(1) as usize as u32;
+                        let raw_ptr = raw.as_ptr();
+                        let tex_ptr = unsafe { (*raw_ptr).data[0] as usize };
+                        let sub_idx = unsafe { (*raw_ptr).data[1] as usize as u32 };
 
                         let df = DecodedFrame {
                             width: raw.width(),
