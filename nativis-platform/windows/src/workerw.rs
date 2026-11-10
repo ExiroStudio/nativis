@@ -22,12 +22,16 @@ fn to_wide(s: &str) -> Vec<u16> {
     OsStr::new(s).encode_wide().chain(Some(0)).collect()
 }
 
+use std::sync::Arc;
+use crate::throttler::Throttler;
+
 pub struct WorkerWContext {
     pub progman_hwnd: isize,
     pub workerw_hwnd: isize,
     pub wallpaper_hwnd: isize,
     pub width: u32,
     pub height: u32,
+    pub throttler: Arc<Throttler>,
     #[cfg(windows)]
     thread_handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -80,6 +84,16 @@ unsafe extern "system" fn wallpaper_wndproc(
             FillRect(hdc, &ps.rcPaint, brush);
             DeleteObject(brush as _);
             EndPaint(hwnd, &ps);
+            0
+        }
+        WM_POWERBROADCAST => {
+            if wparam == PBT_POWERSETTINGCHANGE as usize {
+                crate::throttler::on_power_broadcast(lparam as isize);
+            }
+            1
+        }
+        WM_WTSSESSION_CHANGE => {
+            crate::throttler::on_session_change(wparam as usize);
             0
         }
         WM_DESTROY => {
@@ -203,6 +217,28 @@ impl WorkerWContext {
                     SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
                 );
 
+                // Register display power and session notifications + WinEvent hook
+                let power_notify = windows::Win32::System::Power::RegisterPowerSettingNotification(
+                    windows::Win32::Foundation::HANDLE(hwnd as _),
+                    &windows::Win32::System::SystemServices::GUID_CONSOLE_DISPLAY_STATE,
+                    windows::Win32::UI::WindowsAndMessaging::REGISTER_NOTIFICATION_FLAGS(0),
+                );
+
+                let _ = windows::Win32::System::RemoteDesktop::WTSRegisterSessionNotification(
+                    windows::Win32::Foundation::HWND(hwnd as _),
+                    0,
+                );
+
+                let winevent_hook = windows::Win32::UI::Accessibility::SetWinEventHook(
+                    windows::Win32::UI::WindowsAndMessaging::EVENT_SYSTEM_FOREGROUND,
+                    windows::Win32::UI::WindowsAndMessaging::EVENT_SYSTEM_FOREGROUND,
+                    windows::Win32::Foundation::HMODULE::default(),
+                    Some(crate::throttler::winevent_proc),
+                    0,
+                    0,
+                    windows::Win32::UI::WindowsAndMessaging::WINEVENT_OUTOFCONTEXT,
+                );
+
                 let _ = tx.send(Ok(hwnd as usize));
 
                 // Standard message pump for the wallpaper window
@@ -211,6 +247,17 @@ impl WorkerWContext {
                     TranslateMessage(&msg);
                     DispatchMessageW(&msg);
                 }
+
+                // Clean up power, session notifications and WinEvent hook
+                if let Ok(pn) = power_notify {
+                    let _ = windows::Win32::System::Power::UnregisterPowerSettingNotification(pn);
+                }
+                let _ = windows::Win32::System::RemoteDesktop::WTSUnRegisterSessionNotification(
+                    windows::Win32::Foundation::HWND(hwnd as _),
+                );
+                if !winevent_hook.is_invalid() {
+                    let _ = windows::Win32::UI::Accessibility::UnhookWinEvent(winevent_hook);
+                }
             });
 
             let screen_cx = GetSystemMetrics(SM_CXVIRTUALSCREEN);
@@ -218,8 +265,17 @@ impl WorkerWContext {
             let width = if screen_cx > 0 { screen_cx as u32 } else { 1920 };
             let height = if screen_cy > 0 { screen_cy as u32 } else { 1080 };
 
+            let throttler = Arc::new(Throttler::new(
+                0,
+                progman as isize,
+                target_workerw as isize,
+            ));
+
             let wallpaper_hwnd = rx.recv()
                 .context("Failed to receive window handle from thread")??;
+
+            throttler.set_wallpaper_hwnd(wallpaper_hwnd as isize);
+            throttler.evaluate();
 
             info!("WorkerW desktop injection successful. Wallpaper HWND: 0x{:X} ({}x{})", wallpaper_hwnd, width, height);
 
@@ -229,6 +285,7 @@ impl WorkerWContext {
                 wallpaper_hwnd: wallpaper_hwnd as isize,
                 width,
                 height,
+                throttler,
                 thread_handle: Some(thread_handle),
             })
         }

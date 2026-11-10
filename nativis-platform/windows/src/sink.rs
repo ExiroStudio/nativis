@@ -1,6 +1,8 @@
+use std::sync::Arc;
 use anyhow::Result;
 use nativis_core::contract::{Frame, FrameSink, MediaError};
 use nativis_core::resource::ResourceManager;
+use crate::throttler::Throttler;
 
 #[cfg(windows)]
 use anyhow::Context;
@@ -18,11 +20,19 @@ pub struct WindowsDirectSink {
     pub wallpaper_hwnd: isize,
     #[cfg(windows)]
     renderer: Option<Mutex<D3D11Renderer>>,
+    #[cfg(windows)]
+    throttler: Arc<Throttler>,
     resources: ResourceManager,
 }
 
 impl WindowsDirectSink {
-    pub fn new(wallpaper_hwnd: isize, _width: u32, _height: u32, resources: ResourceManager) -> Result<Self> {
+    pub fn new(
+        wallpaper_hwnd: isize,
+        _width: u32,
+        _height: u32,
+        _throttler: Arc<Throttler>,
+        resources: ResourceManager,
+    ) -> Result<Self> {
         #[cfg(windows)]
         let renderer = {
             if wallpaper_hwnd != 0 {
@@ -39,6 +49,8 @@ impl WindowsDirectSink {
             wallpaper_hwnd,
             #[cfg(windows)]
             renderer,
+            #[cfg(windows)]
+            throttler: _throttler,
             resources,
         })
     }
@@ -55,6 +67,12 @@ impl FrameSink for WindowsDirectSink {
     fn submit(&mut self, frame: Frame) -> Result<(), MediaError> {
         #[cfg(windows)]
         {
+            if self.throttler.is_paused() {
+                // Throttled: drop GPU upload and sleep a bit to keep CPU at 0.00%
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                return Ok(());
+            }
+
             let renderer_lock = match &self.renderer {
                 Some(r) => r,
                 None => return Err(MediaError::GpuUpload("D3D11 Renderer not initialized".into())),
