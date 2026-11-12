@@ -51,4 +51,37 @@ impl Platform for WindowsPlatform {
             .context("Failed to initialize WindowsDirectSink")?;
         Ok(Box::new(sink))
     }
+
+    fn outputs(&self) -> Vec<nativis_core::platform::OutputInfo> {
+        let monitors = crate::monitor::enumerate_monitors();
+        if monitors.is_empty() {
+            return vec![nativis_core::platform::OutputInfo {
+                id: "win-virtual".to_string(),
+                name: "Virtual Desktop".to_string(),
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+                scale_factor: 1.0,
+                refresh_rate_mhz: 60000,
+                is_primary: true,
+            }];
+        }
+
+        monitors.into_iter().enumerate().map(|(idx, m)| {
+            let scale = if m.dpi_x > 0 { m.dpi_x as f64 / 96.0 } else { 1.0 };
+            nativis_core::platform::OutputInfo {
+                id: format!("win-monitor-{}", idx),
+                name: format!("Display {} ({:?})", idx + 1, m.hmonitor),
+                x: m.rect.0,
+                y: m.rect.1,
+                width: m.width,
+                height: m.height,
+                scale_factor: scale,
+                refresh_rate_mhz: 60000,
+                is_primary: m.is_primary,
+            }
+        }).collect()
+    }
 }
+

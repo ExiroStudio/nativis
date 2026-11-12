@@ -24,7 +24,7 @@
 //!   owns
 //!     ├── ResourceManager clone  (shared with Runtime — registers PlanarBuffers)
 //!     ├── Decoder thread         (background OS thread, exits when channel drops)
-//!     └── Frame queue            (crossbeam bounded(2) Receiver<DecodedFrame>)
+//!     └── Frame queue            (crossbeam bounded(1) Receiver<DecodedFrame>, A3a)
 //!
 //! Runtime
 //!   owns
@@ -103,6 +103,21 @@ impl Drop for HardwareDecodeState {
 }
 
 fn software_thread_count() -> usize {
+    software_thread_count_for(0, 0)
+}
+
+/// A3b: Determine software decode thread count based on video resolution.
+/// Frame threading holds ~1.5× more frames per thread, so we cap threads
+/// for small resolutions to avoid RAM waste. Formula from MEMORY_ALLOCATION.md:
+/// RAM ≈ threads_held × W × H × 1.5 bytes for NV12.
+///
+/// - ≤720p  → 1 thread  (~19 MB anon)
+/// - ≤1080p → 2 threads (~45 MB anon)
+/// - ≤1440p → 3 threads (~67 MB anon)
+/// - 4K+    → 4 threads (~183 MB anon, same as before but now explicit)
+///
+/// NATIVIS_DECODE_THREADS env var always overrides.
+fn software_thread_count_for(width: u32, height: u32) -> usize {
     if let Some(count) = std::env::var("NATIVIS_DECODE_THREADS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -111,13 +126,32 @@ fn software_thread_count() -> usize {
         return count;
     }
 
-    std::thread::available_parallelism()
-        .map(|parallelism| parallelism.get().saturating_sub(1).clamp(1, 4))
-        .unwrap_or(1)
+    let pixels = (width as u64) * (height as u64);
+    let resolution_threads = if pixels == 0 {
+        // Resolution unknown at the time of this call — use max available.
+        std::thread::available_parallelism()
+            .map(|p| p.get().saturating_sub(1).clamp(1, 4))
+            .unwrap_or(1)
+    } else if pixels <= 1280 * 720 {
+        1 // ≤720p
+    } else if pixels <= 1920 * 1080 {
+        2 // ≤1080p
+    } else if pixels <= 2560 * 1440 {
+        3 // ≤1440p
+    } else {
+        4 // 4K and above
+    };
+
+    let available = std::thread::available_parallelism()
+        .map(|p| p.get())
+        .unwrap_or(1);
+
+    resolution_threads.min(available.saturating_sub(1).max(1))
 }
 
-fn configure_software_threads(context: &mut ffmpeg::codec::context::Context) {
-    let mut config = threading::Config::count(software_thread_count());
+fn configure_software_threads(context: &mut ffmpeg::codec::context::Context, width: u32, height: u32) {
+    let thread_count = software_thread_count_for(width, height);
+    let mut config = threading::Config::count(thread_count);
     config.kind = threading::Type::Frame;
     context.set_threading(config);
 }
@@ -350,8 +384,11 @@ impl MediaBackend for VideoBackend {
         self.accumulated_time = Duration::ZERO;
         self.last_pts = Duration::ZERO;
 
-        // bounded(2): natural backpressure — decoder pauses if Runtime is slow.
-        let (tx, rx) = bounded::<DecodedFrame>(2);
+        // A3a: bounded(1) — only one decoded frame waits in the channel at a time.
+        // This reduces in-flight frames from the previous bounded(2), saving ~12 MB
+        // for 4K NV12 (W×H×1.5 bytes). The decoder still runs one frame ahead for
+        // smooth playback with natural backpressure. See MEMORY_ALLOCATION.md §5.
+        let (tx, rx) = bounded::<DecodedFrame>(1);
         let stop     = Arc::new(AtomicBool::new(false));
 
         self.rx          = Some(rx);
@@ -433,38 +470,28 @@ impl MediaBackend for VideoBackend {
             let width   = df.width;
             let height  = df.height;
 
-            let handle = if let Some(gpu_frame) = &df.d3d11_texture {
-                let buf = nativis_core::resource::D3D11TextureResource {
-                    texture_ptr: gpu_frame.texture_ptr,
-                    subresource_index: gpu_frame.subresource_index,
-                    width,
-                    height,
-                    format: 103, // DXGI_FORMAT_NV12
-                    keeper: gpu_frame.frame_ref.clone(),
-                };
-                resources.register(Box::new(buf))
-            } else {
-                // Register NV12 planar data — Arc::clone is refcount-only, NO memcpy.
-                let buf = PlanarBuffer {
-                    format: PixelFormat::Nv12,
-                    width,
-                    height,
-                    planes: vec![
-                        PlaneDesc { data: df.y_plane.clone(),  stride: df.y_stride },
-                        PlaneDesc { data: df.uv_plane.clone(), stride: df.uv_stride },
-                    ],
-                };
-                resources.register(Box::new(buf))
+            // Register NV12 planar data — Arc::clone is refcount-only, NO memcpy.
+            let buf = PlanarBuffer {
+                format: PixelFormat::Nv12,
+                width,
+                height,
+                planes: vec![
+                    PlaneDesc { data: df.y_plane.clone(),  stride: df.y_stride },
+                    PlaneDesc { data: df.uv_plane.clone(), stride: df.uv_stride },
+                ],
             };
+            let handle = resources.register(Box::new(buf));
             self.last_handle = Some(handle);
 
-            self.pending = Some(Frame {
-                resource:  handle,
+
+            self.pending = Some(Frame::new(
+                handle,
                 width,
                 height,
                 pts,
-                is_opaque: true,
-            });
+                true,
+            ));
+
 
             let us = t0.elapsed().as_micros() as u64;
             self.total_publish_us += us;
@@ -562,7 +589,12 @@ fn decoder_thread(
                 break;
             }
         };
-        configure_software_threads(&mut context);
+        // A3b: get video resolution from codec parameters to select thread count.
+        let (stream_width, stream_height) = unsafe {
+            let par = stream.parameters().as_ptr();
+            ((*par).width as u32, (*par).height as u32)
+        };
+        configure_software_threads(&mut context, stream_width, stream_height);
 
         let hardware_preference = if allow_hardware {
             preference
@@ -593,7 +625,7 @@ fn decoder_thread(
                         break;
                     }
                 };
-                configure_software_threads(&mut software_context);
+                configure_software_threads(&mut software_context, stream_width, stream_height);
                 match software_context.decoder().video() {
                     Ok(decoder) => decoder,
                     Err(error) => {
@@ -602,6 +634,7 @@ fn decoder_thread(
                     }
                 }
             }
+
             Err(error) => {
                 error!("[NATIVIS DECODE] decoder open failed: {}", error);
                 break;
@@ -615,11 +648,45 @@ fn decoder_thread(
             .map(|state| state.device_name)
             .unwrap_or("software");
 
-        info!(
-            "[NATIVIS DECODE] Opened: {}x{} {:?} → NV12 tb={}/{} mode={} threads={}",
-            w, h, decoder_format, tb.numerator(), tb.denominator(), decoder_mode,
-            software_thread_count(),
-        );
+        // K2: Log decode mode and adapter info at info level (D7.3 — no silent fallbacks).
+        // On Windows, D3D11VA decode runs on GPU but frames are read back to CPU RAM
+        // (zero-copy path disabled in Phase 0 due to cross-device bug, see K1 comment).
+        #[cfg(target_os = "windows")]
+        {
+            if hardware.is_some() {
+                info!(
+                    "[NATIVIS DECODE] Opened: {}x{} {:?} → NV12 tb={}/{} mode={}+cpu_readback threads={} \
+                     (zero-copy disabled in Phase 0, see ARCHITECTURE_REVIEW §1.1 K1)",
+                    w, h, decoder_format, tb.numerator(), tb.denominator(), decoder_mode,
+                    software_thread_count(),
+                );
+            } else {
+                warn!(
+                    "[NATIVIS DECODE] Opened: {}x{} {:?} → NV12 tb={}/{} mode=software threads={} \
+                     (hardware decode unavailable or disabled; expect higher CPU/RAM usage)",
+                    w, h, decoder_format, tb.numerator(), tb.denominator(),
+                    software_thread_count(),
+                );
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            if hardware.is_some() {
+                info!(
+                    "[NATIVIS DECODE] Opened: {}x{} {:?} → NV12 tb={}/{} mode={} threads={}",
+                    w, h, decoder_format, tb.numerator(), tb.denominator(), decoder_mode,
+                    software_thread_count(),
+                );
+            } else {
+                warn!(
+                    "[NATIVIS DECODE] Opened: {}x{} {:?} → NV12 tb={}/{} mode=software threads={} \
+                     (hardware decode unavailable or disabled; expect higher CPU/RAM usage)",
+                    w, h, decoder_format, tb.numerator(), tb.denominator(),
+                    software_thread_count(),
+                );
+            }
+        }
+
 
         let mut raw = ffmpeg::util::frame::video::Video::empty();
         let mut transferred = ffmpeg::util::frame::video::Video::empty();
@@ -638,50 +705,28 @@ fn decoder_thread(
                 let t_decode_done = Instant::now();
                 let raw_pts = raw.pts().unwrap_or(0);
 
+                // K1 FIX (Phase 0, Option A): The D3D11 zero-copy path is DISABLED on Windows.
+                //
+                // Root cause H1 (high confidence, ARCHITECTURE_REVIEW_2026-11.md §1.1):
+                // The FFmpeg decoder allocates its own ID3D11Device independently via
+                // av_hwdevice_ctx_create(D3D11VA, NULL, ...) in configure_hardware_decoder().
+                // The D3D11Renderer creates a *separate* device in D3D11Renderer::new().
+                // CopySubresourceRegion with a source texture from a different device is an
+                // invalid D3D11 operation — it silently produces black or green frames with
+                // no error code (the API returns void), violating D7.3.
+                //
+                // Fix: Fall through to av_hwframe_transfer_data (CPU readback) below.
+                // D3D11VA decode still runs on the GPU; only the final readback is CPU.
+                // This is consistent with D6 (CPU readback as the cross-platform baseline).
+                //
+                // The zero-copy path will be re-enabled in Phase 1 when surface negotiation
+                // allows the platform to share its D3D11 device with the decoder (Option B).
                 #[cfg(target_os = "windows")]
                 if hardware.is_some() && raw.format() == Pixel::from(ffi::AVPixelFormat::AV_PIX_FMT_D3D11) {
-                    let cloned_frame = unsafe { ffi::av_frame_clone(raw.as_ptr()) };
-                    if !cloned_frame.is_null() {
-                        struct AvFrameKeeper(*mut ffi::AVFrame);
-                        impl Drop for AvFrameKeeper {
-                            fn drop(&mut self) {
-                                unsafe { ffi::av_frame_free(&mut self.0) };
-                            }
-                        }
-                        unsafe impl Send for AvFrameKeeper {}
-                        unsafe impl Sync for AvFrameKeeper {}
-
-                        let keeper = Arc::new(AvFrameKeeper(cloned_frame));
-                        let (tex_ptr, sub_idx) = unsafe {
-                            let raw_ptr = raw.as_ptr();
-                            ((*raw_ptr).data[0] as usize, (*raw_ptr).data[1] as usize as u32)
-                        };
-
-                        let df = DecodedFrame {
-                            width: raw.width(),
-                            height: raw.height(),
-                            pts: raw_pts,
-                            time_base_num: tb.numerator(),
-                            time_base_den: tb.denominator(),
-                            y_plane: Arc::from([]),
-                            uv_plane: Arc::from([]),
-                            y_stride: 0,
-                            uv_stride: 0,
-                            chroma_height: (raw.height() + 1) / 2,
-                            d3d11_texture: Some(Arc::new(frame::D3D11GpuFrame {
-                                texture_ptr: tex_ptr,
-                                subresource_index: sub_idx,
-                                frame_ref: Some(keeper),
-                            })),
-                        };
-
-                        decode_count += 1;
-                        if tx.send(df).is_err() {
-                            break 'outer;
-                        }
-                        continue;
-                    }
+                    // Intentionally fall through to av_hwframe_transfer_data below.
+                    // Do NOT take the zero-copy branch.
                 }
+
 
                 let source = if let Some(state) = hardware.as_ref() {
                     if raw.format() == Pixel::from(state.pixel_format) {

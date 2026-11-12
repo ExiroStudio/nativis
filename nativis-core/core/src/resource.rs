@@ -50,22 +50,8 @@ impl Resource for PlanarBuffer {
     fn as_any(&self) -> &dyn Any { self }
 }
 
-/// A GPU-backed Direct3D 11 texture resource (Zero-Copy VRAM).
-/// Avoids transferring decoded video frames across the PCIe bus to CPU RAM.
-pub struct D3D11TextureResource {
-    pub texture_ptr: usize,     // Raw pointer to ID3D11Texture2D
-    pub subresource_index: u32, // Texture array slice index
-    pub width: u32,
-    pub height: u32,
-    pub format: u32,            // DXGI_FORMAT (typically DXGI_FORMAT_NV12 = 103)
-    pub keeper: Option<Arc<dyn Any + Send + Sync>>, // Lifetime keeper for underlying decode frame buffer
-}
 
-impl Resource for D3D11TextureResource {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
+
 
 /// Central registry for media resources.
 /// Shared between MediaBackends (producers) and FrameSinks (consumers).

@@ -9,6 +9,10 @@ use thiserror::Error;
 
 use crate::clock::MediaClock;
 use nativis_asset::AssetPath;
+use nativis_protocol::{
+    NativisSurface, NATIVIS_FORMAT_NV12, NATIVIS_FORMAT_RGBA8888,
+    NATIVIS_SURFACE_KIND_CPU_BUFFER, NATIVIS_SURFACE_KIND_CPU_PLANAR, NATIVIS_SURFACE_KIND_CPU_SHM,
+};
 
 // ── Resource System ──────────────────────────────────────────────────────────
 
@@ -41,6 +45,35 @@ pub enum MediaCapability {
     Subtitle,
 }
 
+// ── Source Classes (Phase 4) ──────────────────────────────────────────────────
+
+/// Three distinct source classes defined in the Nativis engine (D1, D2):
+///
+/// 1. `Producer`    — Continuous frame streams (video, camera, capture) requiring buffer pools.
+/// 2. `Declarative` — Static or procedural content (images, shaders) where host supplies time.
+/// 3. `Embedded`   — Autonomous foreign surfaces (HTML, external windows) embedded into desktop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SourceClass {
+    #[default]
+    Producer,
+    Declarative,
+    Embedded,
+}
+
+// ── Scaling Modes (Phase 3) ───────────────────────────────────────────────────
+
+/// Wallpaper presentation scaling mode per output (monitor).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScalingMode {
+    #[default]
+    Fill,    // Crop to fill viewport preserving aspect ratio
+    Fit,     // Letterbox to fit inside viewport
+    Stretch, // Stretch to match viewport dimensions
+    Center,  // Center 1:1 without scaling
+    Tile,    // Repeat across viewport
+    Span,    // Span single surface across all monitors
+}
+
 /// A decoded frame ready for transport or rendering.
 ///
 /// Carries no implementation details. The resource could be in CPU RAM, GPU VRAM,
@@ -57,31 +90,76 @@ pub struct Frame {
     pub pts: Duration,
     /// When `true`, the frame has no transparent pixels.
     pub is_opaque: bool,
+    /// Optional POD surface descriptor for zero-copy or direct handle passing (Phase 1).
+    pub surface: Option<NativisSurface>,
 }
 
-// ── FrameStatus ───────────────────────────────────────────────────────────────
+impl Frame {
+    /// Create a standard Frame backed by a ResourceHandle.
+    pub fn new(
+        resource: ResourceHandle,
+        width: u32,
+        height: u32,
+        pts: Duration,
+        is_opaque: bool,
+    ) -> Self {
+        Self {
+            resource,
+            width,
+            height,
+            pts,
+            is_opaque,
+            surface: None,
+        }
+    }
+}
+
+// ── FrameStatus (Phase 2 Event-Driven) ────────────────────────────────────────
 
 /// The result of polling `MediaBackend::current_frame()`.
 ///
 /// The render engine uses this to avoid unnecessary GPU work:
-/// - `Ready`      → upload/bind and render the new frame.
-/// - `Unchanged`  → reuse the previously bound texture.
-/// - `EndOfStream`→ stop rendering or loop, depending on policy.
+/// - `Ready`       → upload/bind and render the new frame.
+/// - `Unchanged`   → reuse the previously bound texture.
+/// - `Idle`        → static content is resting; 0 wakeups needed until an event occurs (Phase 2).
+/// - `EndOfStream` → stop rendering or loop, depending on policy.
 #[derive(Debug, Clone)]
 pub enum FrameStatus {
     /// A new frame is available for rendering.
     Ready(Frame),
     /// The media has not advanced; the last frame is still valid.
     Unchanged,
+    /// Phase 2: Static content is idle — zero polling wakeups required until state changes.
+    Idle,
     /// The media stream has ended.
     EndOfStream,
 }
 
-// ── FrameSink ─────────────────────────────────────────────────────────────────
+// ── FrameSink & Negotiation (Phase 1) ─────────────────────────────────────────
+
+/// Advertised surface kinds and pixel formats accepted by a FrameSink.
+#[derive(Debug, Clone)]
+pub struct SinkCapabilities {
+    pub accepted_kinds: Vec<u32>,   // NATIVIS_SURFACE_KIND_*
+    pub accepted_formats: Vec<u32>, // NATIVIS_FORMAT_*
+}
 
 /// Transport boundary. The runtime calls this to push frames to the platform.
 pub trait FrameSink: Send + Sync {
     fn submit(&mut self, frame: Frame) -> Result<(), MediaError>;
+
+    /// Phase 1: Negotiated capabilities advertised by the sink.
+    /// Sinks advertise the surface kinds and formats they accept in preference order.
+    fn capabilities(&self) -> SinkCapabilities {
+        SinkCapabilities {
+            accepted_kinds: vec![
+                NATIVIS_SURFACE_KIND_CPU_PLANAR,
+                NATIVIS_SURFACE_KIND_CPU_SHM,
+                NATIVIS_SURFACE_KIND_CPU_BUFFER,
+            ],
+            accepted_formats: vec![NATIVIS_FORMAT_RGBA8888, NATIVIS_FORMAT_NV12],
+        }
+    }
 }
 
 // ── Error ─────────────────────────────────────────────────────────────────────
@@ -96,6 +174,8 @@ pub enum MediaError {
     GpuUpload(String),
     #[error("Unsupported format: {0}")]
     UnsupportedFormat(String),
+    #[error("Surface rejected by sink: {0}")]
+    SurfaceRejected(String),
 }
 
 // ── MediaBackend — frozen contract ────────────────────────────────────────────
@@ -116,7 +196,11 @@ pub trait MediaBackend: Send + Sync {
     /// Human-readable backend name (e.g. `"image_backend"`).
     fn name(&self) -> &'static str;
 
-    ///
+    /// The architectural classification of this source (Producer, Declarative, Embedded).
+    fn source_class(&self) -> SourceClass {
+        SourceClass::Producer
+    }
+
     /// The backend can allocate resources via a context passed by the Application.
     fn open(
         &mut self,
@@ -146,3 +230,4 @@ pub trait MediaBackend: Send + Sync {
     /// Release all GPU resources and close decoders.
     fn close(&mut self);
 }
+

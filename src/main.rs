@@ -155,11 +155,16 @@ fn main() -> Result<()> {
                 info!("Starting Nativis background daemon (--no-gui) with wallpaper: {}", initial_wallpaper);
                 return run_daemon(Some(initial_wallpaper));
             }
+            "--decode-worker" => {
+                let media = args.get(2).map(|s| s.as_str()).unwrap_or("arlenchino.mp4");
+                return run_decode_worker(media);
+            }
             "--ui" | "ui" => {
                 let cfg = UserConfig::load();
                 ensure_daemon_running(Some(&cfg.active_wallpaper))?;
                 return nativis_ui::run_ui();
             }
+
             _ => {
                 let target_media = &args[1];
                 if is_daemon_running() {
@@ -290,7 +295,10 @@ fn run_daemon(initial_wallpaper: Option<&str>) -> Result<()> {
     let config = RuntimeConfig { target_fps: 60 };
     let runtime = Runtime::new(config);
 
-    runtime.run_with_commands(backend, sink, command_rx)?;
+    // Pass resources and clock into the conductor so it can handle OpenAndSwap
+    // commands atomically (close old → open new, no parallel decode window).
+    let runtime_resources = (*resources).clone();
+    runtime.run_with_commands(backend, sink, command_rx, runtime_resources, clock)?;
 
     Ok(())
 }
@@ -433,13 +441,13 @@ fn start_ipc_server(
 fn handle_ipc_command(
     cmd: IpcCommand,
     command_tx: &Sender<RuntimeCommand>,
-    resources: &ResourceManager,
+    _resources: &ResourceManager,
     current_wallpaper: &RwLock<Option<String>>,
     is_paused: &AtomicBool,
 ) -> IpcResponse {
     match cmd {
-        IpcCommand::SetWallpaper { uri, .. } => {
-            info!("IPC request: SetWallpaper -> {}", uri);
+        IpcCommand::SetWallpaper { uri, monitor, scaling } => {
+            info!("IPC request: SetWallpaper -> {} (monitor={:?}, scaling={:?})", uri, monitor, scaling);
             let asset_path = match AssetPath::parse(&uri) {
                 Ok(p) => p,
                 Err(e) => return IpcResponse::Error { message: format!("Invalid URI {}: {}", uri, e) },
@@ -450,26 +458,32 @@ fn handle_ipc_command(
             #[cfg(any(not(target_os = "windows"), feature = "video"))]
             plugin_manager.register("video_backend", || Box::new(VideoBackend::new()));
 
-            let mut backend = match plugin_manager.open(&asset_path) {
+            // Select the backend by extension only — do NOT call open() here.
+            // The conductor will call close() on the old backend then open() on the new one
+            // atomically via OpenAndSwap, eliminating the parallel-decode race (K4).
+            let backend = match plugin_manager.open(&asset_path) {
                 Some(b) => b,
                 None => return IpcResponse::Error { message: format!("No plugin found for {}", uri) },
             };
 
-            let clock = MediaClock::new();
-            if let Err(e) = backend.open(&asset_path, &clock, resources) {
-                return IpcResponse::Error { message: format!("Failed to open backend: {}", e) };
-            }
-
             *current_wallpaper.write() = Some(uri.clone());
-            let _ = command_tx.send(RuntimeCommand::SetBackend(backend));
+            let _ = command_tx.send(RuntimeCommand::OpenAndSwap { backend, source: asset_path });
 
-            // Persist wallpaper choice in user config
+            // Persist wallpaper choice and scaling mode in user config (Phase 3)
             let mut cfg = UserConfig::load();
             cfg.active_wallpaper = uri.clone();
+            if let Some(ref s) = scaling {
+                cfg.scaling = s.clone();
+            }
             let _ = cfg.save();
 
-            IpcResponse::Ok { message: format!("Wallpaper set to {}", uri) }
+            let target_desc = match monitor {
+                Some(ref m) => format!("monitor {}", m),
+                None => "all outputs".to_string(),
+            };
+            IpcResponse::Ok { message: format!("Wallpaper set to {} on {}", uri, target_desc) }
         }
+
         IpcCommand::Pause => {
             is_paused.store(true, Ordering::SeqCst);
             let _ = command_tx.send(RuntimeCommand::SetPause(true));
@@ -538,3 +552,41 @@ fn handle_ipc_command(
         }
     }
 }
+
+/// Out-of-process decode worker (Phase 5, D5: single executable with worker mode).
+///
+/// Running the heavy decoder (FFmpeg) in a worker process allows 100% of decoder
+/// memory (100–400 MB anon heap) to be immediately reclaimed by the OS upon exit.
+fn run_decode_worker(media_path: &str) -> Result<()> {
+    info!("Starting Nativis out-of-process decode worker for '{}'", media_path);
+    let asset_path = AssetPath::parse(media_path)?;
+    let mut plugin_manager = PluginManager::new();
+    #[cfg(any(not(target_os = "windows"), feature = "video"))]
+    plugin_manager.register("video_backend", || Box::new(VideoBackend::new()));
+    plugin_manager.register("image_backend", || Box::new(ImageBackend::new()));
+
+    let mut backend = plugin_manager
+        .open(&asset_path)
+        .ok_or_else(|| anyhow::anyhow!("No plugin found for worker decode of {}", media_path))?;
+
+    let resources = Arc::new(ResourceManager::new());
+    let clock = MediaClock::new();
+    backend.open(&asset_path, &clock, &resources)?;
+    info!("Decode worker opened successfully for '{}'. Waiting on stdin for termination...", media_path);
+
+    use std::io::BufRead;
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        match line {
+            Ok(ref l) if l == "exit" || l == "stop" || l == "quit" => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+
+    info!("Worker received termination command / EOF. Closing backend and returning RAM to OS...");
+    backend.close();
+    info!("Decode worker terminated cleanly.");
+    Ok(())
+}
+

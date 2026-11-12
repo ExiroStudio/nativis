@@ -63,7 +63,7 @@ impl Renderer {
         }
 
         // ── Pass 2: Composite ────────────────────────────────────────────────
-        let blit = match &self.blit {
+        let _blit = match &self.blit {
             Some(b) => b,
             None => {
                 warn!("Renderer not initialized — call init() before draw()");
@@ -77,7 +77,7 @@ impl Renderer {
                 self.last_frame = Some(f.clone());
                 Some(f)
             }
-            FrameStatus::Unchanged => {
+            FrameStatus::Unchanged | FrameStatus::Idle => {
                 self.last_frame.clone()
             }
             FrameStatus::EndOfStream => {
@@ -86,9 +86,10 @@ impl Renderer {
             }
         };
 
-        if let Some(frame) = render_frame {
-            let surface_view = rhi.surface_texture().wgpu_view();
-            let ctx = rhi.rhi_context();
+        if let Some(_frame) = render_frame {
+            let _surface_view = rhi.surface_texture().wgpu_view();
+            let _ctx = rhi.rhi_context();
+
 
             // Post-effects: if any are registered, render to an intermediate
             // texture, then chain through each effect to the surface.

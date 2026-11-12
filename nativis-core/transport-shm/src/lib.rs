@@ -17,6 +17,7 @@ pub struct ShmSurface {
     fd: c_int,
     size: usize,
     ptr: *mut c_void,
+    unlink_name: Option<CString>,
 }
 
 unsafe impl Send for ShmSurface {}
@@ -80,7 +81,8 @@ impl ShmSurface {
             return Err(format!("mmap failed: {}", std::io::Error::last_os_error()));
         }
 
-        Ok(Self { fd, size: actual_size, ptr })
+        let unlink_name = if create { Some(c_name) } else { None };
+        Ok(Self { fd, size: actual_size, ptr, unlink_name })
     }
 
     pub fn is_valid(&self) -> bool {
@@ -97,9 +99,14 @@ impl Drop for ShmSurface {
         unsafe {
             libc::munmap(self.ptr, self.size);
             libc::close(self.fd);
+            // Clean up SHM region from /dev/shm when the creator drops it
+            if let Some(ref name) = self.unlink_name {
+                libc::shm_unlink(name.as_ptr());
+            }
         }
     }
 }
+
 
 impl SurfaceOps for ShmSurface {
     fn acquire(&self) -> Result<SurfaceHandle, String> {

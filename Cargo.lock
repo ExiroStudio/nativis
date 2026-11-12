@@ -3000,6 +3000,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "nativis-asset",
+ "nativis-protocol",
  "nativis-rhi",
  "thiserror 2.0.19",
  "tracing",
@@ -3160,6 +3161,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
+ "nativis-asset",
  "nativis-core",
  "thiserror 2.0.19",
  "tracing",

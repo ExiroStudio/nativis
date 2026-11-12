@@ -41,7 +41,22 @@ impl Platform for WaylandPlatform {
             .context("Failed to create WaylandDirectSink")?;
         Ok(Box::new(sink))
     }
+
+    fn outputs(&self) -> Vec<nativis_core::platform::OutputInfo> {
+        vec![nativis_core::platform::OutputInfo {
+            id: "wayland-wl_output-0".to_string(),
+            name: "Wayland Layer Surface".to_string(),
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale_factor: 1.0,
+            refresh_rate_mhz: 60000,
+            is_primary: true,
+        }]
+    }
 }
+
 
 #[cfg(test)]
 mod tests {
