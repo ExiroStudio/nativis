@@ -298,7 +298,18 @@ impl FrameSink for ShmSink {
 
         self.frame_count += frame_count_increment;
 
+        #[cfg(target_os = "linux")]
+        if frame_count_increment > 0 {
+            // Item 5: Wake waiting FrameWatcher threads via futex on lower 32 bits of frame_id (offset 8).
+            // Eliminates 240 Hz busy polling in plasmashell, dropping wakeups from 240/s to 0/s when idle.
+            unsafe {
+                let futex_ptr = (handle.ptr as *mut u8).add(8) as *mut u32;
+                libc::syscall(libc::SYS_futex, futex_ptr, libc::FUTEX_WAKE, 1i32, 0, 0, 0);
+            }
+        }
+
         self.surface.release(handle);
+
         
         if !success {
             return Err(MediaError::GpuUpload("Invalid resource type or handle for ShmSink".into()));

@@ -5,7 +5,7 @@
 
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{Receiver, RecvTimeoutError};
 
 use nativis_asset::AssetPath;
 use nativis_core::clock::MediaClock;
@@ -26,6 +26,8 @@ pub enum RuntimeCommand {
         backend: Box<dyn MediaBackend>,
         /// Asset path to pass to `backend.open()`.
         source: AssetPath,
+        /// Optional sender for notifying caller of open success or failure (C3 rollback).
+        reply: Option<crossbeam_channel::Sender<Result<(), String>>>,
     },
     /// Pauses or resumes media clock and frame rendering.
     SetPause(bool),
@@ -35,7 +37,14 @@ pub enum RuntimeCommand {
     SetFps(u32),
     /// Gracefully stops the orchestrator loop.
     Stop,
+    /// Re-submit the last known frame to the sink without advancing the backend.
+    Redraw,
+    /// Platform event (Pause, Resume, Redraw) forwarded from the platform layer.
+    PlatformEvent(nativis_core::platform::PlatformEvent),
 }
+
+
+
 
 /// Target configuration for the runtime orchestrator.
 pub struct RuntimeConfig {
@@ -69,7 +78,7 @@ impl Runtime {
         let (_tx, rx) = crossbeam_channel::unbounded();
         let resources = ResourceManager::new();
         let clock = MediaClock::new();
-        self.run_with_commands(backend, sink, rx, resources, clock)
+        self.run_with_commands(backend, sink, rx, resources, clock, None)
     }
 
     /// Block and run the media loop while listening for dynamic runtime commands.
@@ -84,6 +93,7 @@ impl Runtime {
         command_rx: Receiver<RuntimeCommand>,
         resources: ResourceManager,
         clock: MediaClock,
+        initial_source: Option<AssetPath>,
     ) -> anyhow::Result<()> {
         info!("Runtime started orchestrating: {}", backend.name());
 
@@ -91,6 +101,11 @@ impl Runtime {
         let mut last_tick = Instant::now();
         let mut is_paused = false;
         let mut pending_cmd: Option<RuntimeCommand> = None;
+        // Last successfully submitted frame — used for Redraw (throttle resume, display change,
+        // Explorer crash recovery) so the platform doesn't need the original CpuBuffer to be alive.
+        let mut last_frame: Option<nativis_core::contract::Frame> = None;
+        let mut current_source: Option<AssetPath> = initial_source;
+
 
         loop {
             // Process any pending commands without blocking the frame loop
@@ -101,7 +116,7 @@ impl Runtime {
                         backend.close();
                         backend = new_backend;
                     }
-                    RuntimeCommand::OpenAndSwap { backend: mut new_backend, source } => {
+                    RuntimeCommand::OpenAndSwap { backend: mut new_backend, source, reply } => {
                         // Close old backend first so only one decoder runs at a time (K4).
                         info!(
                             "OpenAndSwap: closing '{}', opening '{}' for '{}'",
@@ -110,17 +125,32 @@ impl Runtime {
                             source.raw_uri(),
                         );
                         backend.close();
-                        if let Err(e) = new_backend.open(&source, &clock, &resources) {
-                            warn!(
-                                "OpenAndSwap: failed to open '{}' for '{}': {}. Keeping previous backend closed.",
-                                new_backend.name(),
-                                source.raw_uri(),
-                                e,
-                            );
-                            // Keep old backend reference alive (now closed) rather than
-                            // replacing with a half-initialized new one.
-                        } else {
-                            backend = new_backend;
+                        match new_backend.open(&source, &clock, &resources) {
+                            Ok(()) => {
+                                backend = new_backend;
+                                current_source = Some(source);
+                                if let Some(tx) = reply {
+                                    let _ = tx.send(Ok(()));
+                                }
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "OpenAndSwap: failed to open '{}' for '{}': {}. Attempting rollback to previous wallpaper.",
+                                    new_backend.name(),
+                                    source.raw_uri(),
+                                    e,
+                                );
+                                if let Some(ref old_source) = current_source {
+                                    if let Err(re_err) = backend.open(old_source, &clock, &resources) {
+                                        warn!("OpenAndSwap rollback failed: {}", re_err);
+                                    } else {
+                                        info!("OpenAndSwap: successfully rolled back to '{}'", old_source.raw_uri());
+                                    }
+                                }
+                                if let Some(tx) = reply {
+                                    let _ = tx.send(Err(e.to_string()));
+                                }
+                            }
                         }
                     }
                     RuntimeCommand::SetPause(paused) => {
@@ -140,18 +170,61 @@ impl Runtime {
                         backend.close();
                         return Ok(());
                     }
+                    RuntimeCommand::Redraw => {
+                        // Platform requested a re-draw (throttle resume, WM_DISPLAYCHANGE,
+                        // Explorer restart). Re-submit the last frame without touching the backend.
+                        // D3D11Renderer keeps rgba_texture / NV12 textures alive in VRAM — no RAM needed.
+                        if let Some(ref frame) = last_frame {
+                            if let Err(e) = sink.submit(frame.clone()) {
+                                warn!("Redraw: sink.submit error: {}", e);
+                            }
+                        }
+                    }
+                    RuntimeCommand::PlatformEvent(ev) => match ev {
+                        nativis_core::platform::PlatformEvent::Pause => {
+                            is_paused = true;
+                            info!("Platform event: Playback PAUSED (e.g. fullscreen/display off)");
+                        }
+                        nativis_core::platform::PlatformEvent::Resume => {
+                            is_paused = false;
+                            info!("Platform event: Playback RESUMED");
+                            if let Some(ref frame) = last_frame {
+                                if let Err(e) = sink.submit(frame.clone()) {
+                                    warn!("PlatformEvent::Resume redraw error: {}", e);
+                                }
+                            }
+                        }
+                        nativis_core::platform::PlatformEvent::Redraw => {
+                            if let Some(ref frame) = last_frame {
+                                if let Err(e) = sink.submit(frame.clone()) {
+                                    warn!("PlatformEvent::Redraw error: {}", e);
+                                }
+                            }
+                        }
+                    }
                 }
             }
+
+
 
             if is_paused {
                 // True 0.00% CPU usage when paused (game running, display sleep, or user paused):
                 // Block unconditionally on command channel until a command (Resume, SetWallpaper, Stop) arrives.
-                if let Ok(cmd) = command_rx.recv() {
-                    pending_cmd = Some(cmd);
+                //
+                // Item 7 fix: `recv()` returns Err(RecvError) when ALL senders have dropped.
+                // Previously this fell through `if let Ok` silently and re-entered the loop
+                // at ~100% CPU (measured 99.4%). Now we break and shut down gracefully.
+                match command_rx.recv() {
+                    Ok(cmd) => pending_cmd = Some(cmd),
+                    Err(_)  => {
+                        info!("Conductor: command channel disconnected while paused — shutting down.");
+                        break;
+                    }
                 }
                 last_tick = Instant::now();
                 continue;
             }
+
 
 
             let now = Instant::now();
@@ -170,6 +243,8 @@ impl Runtime {
             let mut is_idle = false;
             match status {
                 FrameStatus::Ready(frame) => {
+                    // Remember last submitted frame for Redraw (throttle resume, display change).
+                    last_frame = Some(frame.clone());
                     if let Err(e) = sink.submit(frame) {
                         warn!("FrameSink submit error: {}", e);
                     }
@@ -187,24 +262,57 @@ impl Runtime {
                 }
             }
 
+
             if is_idle {
                 // Phase 2 Event-Driven Cadence:
                 // Block until a new runtime command arrives (e.g. SetWallpaper, Pause, Stop)
                 // or 1-second watchdog timeout. This replaces the 60 Hz busy loop for static
                 // content, reducing CPU wakeups to 0/sec while idle.
-                if let Ok(cmd) = command_rx.recv_timeout(Duration::from_secs(1)) {
-                    pending_cmd = Some(cmd);
+                //
+                // Item 7 fix: `recv_timeout` returns Err(Disconnected) instantly when all senders
+                // have dropped, causing the loop to spin at ~100% CPU (measured 99.8%).
+                // Break on disconnect to shut down gracefully instead.
+                match command_rx.recv_timeout(Duration::from_secs(1)) {
+                    Ok(cmd)                             => pending_cmd = Some(cmd),
+                    Err(RecvTimeoutError::Timeout)      => {}
+                    Err(RecvTimeoutError::Disconnected) => {
+                        info!("Conductor: command channel disconnected while idle — shutting down.");
+                        break;
+                    }
                 }
                 last_tick = Instant::now();
                 continue;
             }
 
-            // Simple sleep-based rate limiting (a real engine uses vsync/presentation feedback)
-            let elapsed = now.elapsed();
-            if elapsed < target_frame_time {
-                std::thread::sleep(target_frame_time - elapsed);
+
+            // Dynamic frame pacing via backend.next_deadline() (Items 6 & 8)
+            // Allows 30 fps video to sleep ~33ms, waking conductor ~30 times/s instead of 60.
+            // Using recv_timeout ensures immediate responsiveness if a command arrives mid-sleep.
+            let sleep_duration = match backend.next_deadline() {
+                Some(deadline) => deadline,
+                None => {
+                    let elapsed = now.elapsed();
+                    if elapsed < target_frame_time {
+                        target_frame_time - elapsed
+                    } else {
+                        Duration::ZERO
+                    }
+                }
+            };
+
+            if sleep_duration > Duration::ZERO {
+                let capped = sleep_duration.min(target_frame_time * 2);
+                match command_rx.recv_timeout(capped) {
+                    Ok(cmd)                             => pending_cmd = Some(cmd),
+                    Err(RecvTimeoutError::Timeout)      => {}
+                    Err(RecvTimeoutError::Disconnected) => {
+                        info!("Conductor: command channel disconnected — shutting down.");
+                        break;
+                    }
+                }
             }
         }
+
 
 
         info!("Runtime orchestrator finished.");

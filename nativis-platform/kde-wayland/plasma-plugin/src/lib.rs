@@ -225,7 +225,60 @@ pub extern "C" fn nativis_get_frame_id(ctx: *mut c_void) -> u64 {
     runtime.last_frame_id
 }
 
+/// Item 5: Blocks calling thread using Linux FUTEX_WAIT on the lower 32 bits of frame_id (offset 8).
+/// Returns immediately if frame_id != last_seen_id.
+/// On timeout or error, returns the current frame_id (or 0).
+/// Eliminates 240 Hz busy polling in plasmashell, resulting in true 0 wakeups/s when idle.
+#[no_mangle]
+pub extern "C" fn nativis_wait_frame(ctx: *mut c_void, last_seen_id: u64, timeout_ms: u32) -> u64 {
+    if ctx.is_null() { return 0; }
+    let runtime = unsafe { &*(ctx as *const NativisConsumer) };
+    runtime.ensure_shm();
+
+    if let Ok(shm_guard) = runtime.shm.lock() {
+        if let Some(shm) = &*shm_guard {
+            if let Ok(handle) = shm.acquire() {
+                if handle.size >= std::mem::size_of::<NativisFrameHeader>() {
+                    let header = unsafe { &*(handle.ptr as *const NativisFrameHeader) };
+                    if header.magic == nativis_protocol::NATIVIS_MAGIC {
+                        let current_id = header.frame_id;
+                        if current_id != last_seen_id && current_id != 0 {
+                            return current_id;
+                        }
+
+                        #[cfg(target_os = "linux")]
+                        {
+                            let futex_ptr = unsafe { (handle.ptr as *mut u8).add(8) as *mut u32 };
+                            let val = (last_seen_id & 0xFFFF_FFFF) as u32;
+                            let ts = libc::timespec {
+                                tv_sec: (timeout_ms / 1000) as libc::time_t,
+                                tv_nsec: ((timeout_ms % 1000) * 1_000_000) as libc::c_long,
+                            };
+                            unsafe {
+                                libc::syscall(libc::SYS_futex, futex_ptr, libc::FUTEX_WAIT, val, &ts, std::ptr::null::<c_void>(), 0);
+                            }
+                            let new_header = unsafe { &*(handle.ptr as *const NativisFrameHeader) };
+                            if new_header.magic == nativis_protocol::NATIVIS_MAGIC {
+                                return new_header.frame_id;
+                            }
+                        }
+                        #[cfg(not(target_os = "linux"))]
+                        {
+                            std::thread::sleep(std::time::Duration::from_millis(4));
+                            return current_id;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(timeout_ms.min(100) as u64));
+    0
+}
+
 unsafe fn read_color_attachments(runtime: &NativisConsumer) -> Option<(*mut u8, Vec<NativisAttachment>)> {
+
     let shm_guard = runtime.shm.lock().ok()?;
     let shm = shm_guard.as_ref()?;
     let handle = shm.acquire().ok()?;

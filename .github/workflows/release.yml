@@ -109,9 +109,15 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $url = "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
-          Write-Host "Downloading FFmpeg shared build from $url..."
+          # C7: Pin immutable dated release matching ffmpeg-sys-next 9.0.x with SHA-256 integrity verification
+          $url = "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/autobuild-2026-11-10-12-39/ffmpeg-n9.0.2-48-gd4070a14ce-win64-gpl-shared-9.0.zip"
+          $expectedHash = "33e50d43c978337588f143f1b8e88d332173827934d664eb960db30a7de8037c"
+          Write-Host "Downloading FFmpeg 9.0 shared build from $url..."
           Invoke-WebRequest -Uri $url -OutFile "ffmpeg.zip"
+          $actualHash = (Get-FileHash -Algorithm SHA256 "ffmpeg.zip").Hash.ToLower()
+          if ($actualHash -ne $expectedHash) {
+              throw "FFmpeg download checksum mismatch! Expected $expectedHash, got $actualHash"
+          }
           Expand-Archive -Path "ffmpeg.zip" -DestinationPath "C:\ffmpeg"
           $extractedDir = Get-ChildItem -Path "C:\ffmpeg" -Directory | Select-Object -First 1 -ExpandProperty FullName
           Write-Host "Setting FFMPEG_DIR=$extractedDir"

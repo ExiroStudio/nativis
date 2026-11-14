@@ -20,6 +20,7 @@ extern "C" {
     void     nativis_render(void* ctx);
     void     nativis_end_frame(void* ctx);
     uint64_t nativis_get_frame_id(void* ctx);
+    uint64_t nativis_wait_frame(void* ctx, uint64_t last_seen_id, uint32_t timeout_ms);
 
     // Multi-plane FFI for NV12
     uint32_t nativis_get_format(void* ctx);

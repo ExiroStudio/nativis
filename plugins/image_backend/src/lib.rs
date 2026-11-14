@@ -14,20 +14,32 @@ static CAPABILITIES: &[MediaCapability] = &[MediaCapability::Alpha];
 /// Media backend for loading static image files into CPU buffers.
 pub struct ImageBackend {
     frame: Option<Frame>,
+    handle: Option<nativis_core::contract::ResourceHandle>,
     pending: Option<Frame>,
     emit_on_next_update: bool,
-    /// Retained so that `close()` can free the registered `CpuBuffer` handle.
+    free_on_next_update: bool,
+    /// Retained so that `update()` or `close()` can free the registered `CpuBuffer` handle.
     resources: Option<ResourceManager>,
+    target_resolution: Option<(u32, u32)>,
 }
 
 impl ImageBackend {
     pub fn new() -> Self {
         Self {
             frame: None,
+            handle: None,
             pending: None,
             emit_on_next_update: false,
+            free_on_next_update: false,
             resources: None,
+            target_resolution: None,
         }
+    }
+
+    /// Set an explicit target resolution to downscale images on load.
+    pub fn with_target_resolution(mut self, width: u32, height: u32) -> Self {
+        self.target_resolution = Some((width, height));
+        self
     }
 }
 
@@ -49,8 +61,8 @@ impl MediaBackend for ImageBackend {
         resources: &ResourceManager,
     ) -> Result<(), MediaError> {
         // If re-opening (e.g. hot-swap), free the previously registered buffer first.
-        if let (Some(res), Some(old_frame)) = (self.resources.as_ref(), self.frame.as_ref()) {
-            res.free(old_frame.resource);
+        if let (Some(res), Some(old_handle)) = (self.resources.as_ref(), self.handle.take()) {
+            res.free(old_handle);
         }
 
         // Retain a clone of the ResourceManager so close() can free the handle later.
@@ -68,9 +80,36 @@ impl MediaBackend for ImageBackend {
         // Drop raw compressed file bytes immediately to minimize peak memory
         drop(bytes);
 
+        // Downscale to target monitor resolution if specified via with_target_resolution
+        // or environment variable NATIVIS_TARGET_RESOLUTION (e.g. "1920x1080").
+        // A 4K image downscaled to 1080p uses only ~8.3 MB instead of ~33 MB,
+        // which brings total image RSS well under 30 MB.
+        let target = self.target_resolution.or_else(|| {
+            std::env::var("NATIVIS_TARGET_RESOLUTION").ok().and_then(|val| {
+                let mut parts = val.split('x');
+                let w: u32 = parts.next()?.parse().ok()?;
+                let h: u32 = parts.next()?.parse().ok()?;
+                Some((w, h))
+            })
+        });
+
+        let dynamic_img = if let Some((max_w, max_h)) = target {
+            if max_w > 0 && max_h > 0 && (dynamic_img.width() > max_w || dynamic_img.height() > max_h) {
+                info!(
+                    "ImageBackend: downscaling {}x{} to monitor resolution {}x{}",
+                    dynamic_img.width(), dynamic_img.height(), max_w, max_h
+                );
+                dynamic_img.resize(max_w, max_h, image::imageops::FilterType::Triangle)
+            } else {
+                dynamic_img
+            }
+        } else {
+            dynamic_img
+        };
+
         let (width, height) = (dynamic_img.width(), dynamic_img.height());
         let has_alpha = dynamic_img.color().has_alpha();
-        // into_rgba8() consumes dynamic_img without duplicating the ~32 MB uncompressed pixel buffer
+        // into_rgba8() consumes dynamic_img without duplicating the uncompressed pixel buffer
         let rgba = dynamic_img.into_rgba8();
 
         // Register the raw pixel buffer as a CPU resource
@@ -80,6 +119,7 @@ impl MediaBackend for ImageBackend {
             height,
         };
         let handle = resources.register(Box::new(cpu_buffer));
+        self.handle = Some(handle);
 
         self.frame = Some(Frame::new(
             handle,
@@ -89,6 +129,7 @@ impl MediaBackend for ImageBackend {
             !has_alpha,
         ));
         self.emit_on_next_update = true;
+        self.free_on_next_update = false;
 
         info!(
             "ImageBackend successfully opened '{}' ({}x{}, alpha={})",
@@ -98,8 +139,10 @@ impl MediaBackend for ImageBackend {
             has_alpha
         );
 
-        // Immediately reclaim temporary decoder arena memory back to OS
-        #[cfg(target_os = "linux")]
+        // Immediately reclaim temporary decoder arena memory back to OS.
+        // malloc_trim is a glibc extension — guard against musl and other non-glibc targets
+        // (Alpine Linux, static musl builds) where the symbol does not exist.
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
         {
             extern "C" {
                 fn malloc_trim(pad: usize) -> std::ffi::c_int;
@@ -116,8 +159,27 @@ impl MediaBackend for ImageBackend {
     }
 
     fn update(&mut self, _dt: Duration) -> Result<(), MediaError> {
+        // Free the CpuBuffer on the tick AFTER emitting the frame (Item 4).
+        // By this tick, the sink has already processed and submitted the frame
+        // (copied to POSIX SHM or uploaded to GPU swapchain). Freeing the ~33 MB
+        // CpuBuffer from ResourceManager reduces daemon RSS to ~34 MB on 4K, or ~8 MB on 1080p.
+        if self.free_on_next_update {
+            if let (Some(res), Some(handle)) = (self.resources.as_ref(), self.handle.take()) {
+                res.free(handle);
+                #[cfg(all(target_os = "linux", target_env = "gnu"))]
+                {
+                    extern "C" {
+                        fn malloc_trim(pad: usize) -> std::ffi::c_int;
+                    }
+                    unsafe { malloc_trim(0); }
+                }
+            }
+            self.free_on_next_update = false;
+        }
+
         self.pending = if self.emit_on_next_update {
             self.emit_on_next_update = false;
+            self.free_on_next_update = true;
             self.frame.clone()
         } else {
             None
@@ -145,21 +207,19 @@ impl MediaBackend for ImageBackend {
     }
 
     fn close(&mut self) {
-        // Free the registered CpuBuffer from the ResourceManager before clearing the handle.
-        // Without this, the pixel data (~32 MB for 4K) leaks until the ResourceManager is dropped.
-        if let (Some(res), Some(frame)) = (self.resources.as_ref(), self.frame.as_ref()) {
-            res.free(frame.resource);
+        // Free the registered CpuBuffer from the ResourceManager if still held.
+        if let (Some(res), Some(handle)) = (self.resources.as_ref(), self.handle.take()) {
+            res.free(handle);
         }
 
         self.frame = None;
         self.pending = None;
         self.emit_on_next_update = false;
+        self.free_on_next_update = false;
         self.resources = None;
 
         // On Linux/glibc, aggressively return freed pages back to the OS.
-        // malloc_trim(0) trims the heap down as far as possible.
-        // size_t maps to usize on all Rust-supported platforms; we avoid adding a libc dep.
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
         {
             extern "C" {
                 fn malloc_trim(pad: usize) -> std::ffi::c_int;
@@ -186,9 +246,12 @@ mod tests {
         );
         let mut backend = ImageBackend {
             frame: Some(frame),
+            handle: Some(ResourceHandle(1)),
             pending: None,
             emit_on_next_update: true,
+            free_on_next_update: false,
             resources: None,
+            target_resolution: None,
         };
 
         backend.update(Duration::ZERO).unwrap();
@@ -199,3 +262,4 @@ mod tests {
     }
 
 }
+

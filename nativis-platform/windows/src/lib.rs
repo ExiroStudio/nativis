@@ -19,11 +19,12 @@ pub use monitor::*;
 
 pub struct WindowsPlatform {
     workerw: Option<WorkerWContext>,
+    event_sender: Option<nativis_core::platform::PlatformEventSender>,
 }
 
 impl WindowsPlatform {
     pub fn new() -> Self {
-        Self { workerw: None }
+        Self { workerw: None, event_sender: None }
     }
 }
 
@@ -38,16 +39,34 @@ impl Platform for WindowsPlatform {
         info!("Bootstrapping WindowsPlatform (WorkerW Desktop Injection)...");
         crate::monitor::enable_dpi_awareness_v2();
         let ctx = WorkerWContext::new().context("Failed to initialize WorkerW context")?;
+        if let Some(ref sender) = self.event_sender {
+            ctx.throttler.set_event_sender(sender.clone());
+        }
         self.workerw = Some(ctx);
         info!("WindowsPlatform bootstrap complete.");
         Ok(())
     }
 
+    fn set_event_sender(&mut self, sender: nativis_core::platform::PlatformEventSender) {
+        if let Some(ref w) = self.workerw {
+            w.throttler.set_event_sender(sender.clone());
+        }
+        self.event_sender = Some(sender);
+    }
+
     fn create_sink(&self, resources: &ResourceManager) -> Result<Box<dyn FrameSink>> {
-        let (hwnd, width, height, throttler) = self.workerw.as_ref()
-            .map(|w| (w.wallpaper_hwnd, w.width, w.height, Arc::clone(&w.throttler)))
-            .unwrap_or_else(|| (0, 1920, 1080, Arc::new(Throttler::new(0, 0, 0))));
-        let sink = WindowsDirectSink::new(hwnd, width, height, throttler, resources.clone())
+        #[cfg(windows)]
+        if let Some(ref w) = self.workerw {
+            let sink = WindowsDirectSink::with_shared(
+                Arc::clone(&w.wallpaper_hwnd),
+                Arc::clone(&w.renderer),
+                Arc::clone(&w.throttler),
+                resources.clone(),
+            );
+            return Ok(Box::new(sink));
+        }
+
+        let sink = WindowsDirectSink::new(0, 1920, 1080, Arc::new(Throttler::new(0, 0, 0)), resources.clone())
             .context("Failed to initialize WindowsDirectSink")?;
         Ok(Box::new(sink))
     }
@@ -70,15 +89,25 @@ impl Platform for WindowsPlatform {
 
         monitors.into_iter().enumerate().map(|(idx, m)| {
             let scale = if m.dpi_x > 0 { m.dpi_x as f64 / 96.0 } else { 1.0 };
+            let id = if !m.device_id.is_empty() {
+                m.device_id
+            } else {
+                format!("win-monitor-{}", idx)
+            };
+            let name = if !m.friendly_name.is_empty() {
+                m.friendly_name
+            } else {
+                format!("Display {} ({:?})", idx + 1, m.hmonitor)
+            };
             nativis_core::platform::OutputInfo {
-                id: format!("win-monitor-{}", idx),
-                name: format!("Display {} ({:?})", idx + 1, m.hmonitor),
+                id,
+                name,
                 x: m.rect.0,
                 y: m.rect.1,
                 width: m.width,
                 height: m.height,
                 scale_factor: scale,
-                refresh_rate_mhz: 60000,
+                refresh_rate_mhz: m.refresh_rate_mhz,
                 is_primary: m.is_primary,
             }
         }).collect()

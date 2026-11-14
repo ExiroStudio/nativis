@@ -129,12 +129,11 @@ void NativisItem::itemChange(ItemChange change, const ItemChangeData &value)
                 while (m_watcherRunning.load(std::memory_order_relaxed)) {
                     void* ctx = m_runtimeCtx;
                     if (!ctx) break;
-                    quint64 current = nativis_get_frame_id(ctx);
-                    if (current != lastSeen) {
+                    quint64 current = nativis_wait_frame(ctx, lastSeen, 1000);
+                    if (current != lastSeen && current != 0) {
                         lastSeen = current;
                         QMetaObject::invokeMethod(this, &QQuickItem::update, Qt::QueuedConnection);
                     }
-                    QThread::msleep(4);
                 }
             });
             m_watcherThread->start();

@@ -4,6 +4,12 @@ use tracing::info;
 #[cfg(windows)]
 use tracing::debug;
 
+// Batch 2: Platform events sent from throttler → conductor via nativis_core::PlatformEvent.
+// nativis-core is already a dependency of this crate; nativis-runtime is NOT (avoids cycle).
+use crossbeam_channel::Sender;
+use nativis_core::platform::PlatformEvent;
+
+
 #[cfg(windows)]
 use windows::{
     Win32::{
@@ -58,6 +64,7 @@ pub struct ThrottlerState {
     pub wallpaper_hwnd: AtomicIsize,
     pub progman_hwnd: AtomicIsize,
     pub workerw_hwnd: AtomicIsize,
+    pub event_sender: parking_lot::RwLock<Option<Sender<PlatformEvent>>>,
 }
 
 impl ThrottlerState {
@@ -70,6 +77,7 @@ impl ThrottlerState {
             wallpaper_hwnd: AtomicIsize::new(wallpaper_hwnd),
             progman_hwnd: AtomicIsize::new(progman_hwnd),
             workerw_hwnd: AtomicIsize::new(workerw_hwnd),
+            event_sender: parking_lot::RwLock::new(None),
         }
     }
 
@@ -79,6 +87,10 @@ impl ThrottlerState {
 
         if !prev_paused {
             info!("Throttler: Desktop rendering PAUSED (reason: {:?})", new_reason);
+            // Notify conductor directly so orchestrator loop can block with 0.00% CPU
+            if let Some(ref sender) = *self.event_sender.read() {
+                let _ = sender.send(PlatformEvent::Pause);
+            }
             // Working set trim specifically when entering paused state:
             // Release memory pages back to OS while application/game is in focus
             #[cfg(windows)]
@@ -95,6 +107,10 @@ impl ThrottlerState {
 
         if prev_paused {
             info!("Throttler: Desktop rendering RESUMED");
+            // Notify conductor to resume media loop and re-present last frame
+            if let Some(ref sender) = *self.event_sender.read() {
+                let _ = sender.send(PlatformEvent::Resume);
+            }
         }
     }
 
@@ -255,6 +271,10 @@ impl Throttler {
         self.state.wallpaper_hwnd.store(hwnd, Ordering::SeqCst);
     }
 
+    pub fn set_event_sender(&self, sender: Sender<PlatformEvent>) {
+        *self.state.event_sender.write() = Some(sender);
+    }
+
     pub fn evaluate(&self) {
         self.state.evaluate();
     }
@@ -304,8 +324,12 @@ pub fn on_session_change(wparam: usize) {
 pub fn on_display_changed() {
     if let Some(state) = GLOBAL_THROTTLER.read().as_ref() {
         state.evaluate();
+        if let Some(ref sender) = *state.event_sender.read() {
+            let _ = sender.send(PlatformEvent::Redraw);
+        }
     }
 }
+
 
 #[cfg(windows)]
 pub unsafe extern "system" fn winevent_proc(

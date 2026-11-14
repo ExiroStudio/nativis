@@ -37,9 +37,9 @@ impl Resource for D3D11TextureResource {
 
 
 pub struct WindowsDirectSink {
-    pub wallpaper_hwnd: isize,
+    pub wallpaper_hwnd: Arc<std::sync::atomic::AtomicIsize>,
     #[cfg(windows)]
-    renderer: Option<Mutex<D3D11Renderer>>,
+    renderer: Arc<Mutex<Option<D3D11Renderer>>>,
     #[cfg(windows)]
     throttler: Arc<Throttler>,
     resources: ResourceManager,
@@ -53,20 +53,21 @@ impl WindowsDirectSink {
         _throttler: Arc<Throttler>,
         resources: ResourceManager,
     ) -> Result<Self> {
+        let hwnd_atomic = Arc::new(std::sync::atomic::AtomicIsize::new(wallpaper_hwnd));
         #[cfg(windows)]
         let renderer = {
             if wallpaper_hwnd != 0 {
                 let hwnd = windows::Win32::Foundation::HWND(wallpaper_hwnd as *mut _);
                 let r = D3D11Renderer::new(hwnd, _width, _height)
                     .context("Failed to initialize Direct3D 11 renderer")?;
-                Some(Mutex::new(r))
+                Arc::new(Mutex::new(Some(r)))
             } else {
-                None
+                Arc::new(Mutex::new(None))
             }
         };
 
         Ok(Self {
-            wallpaper_hwnd,
+            wallpaper_hwnd: hwnd_atomic,
             #[cfg(windows)]
             renderer,
             #[cfg(windows)]
@@ -74,12 +75,29 @@ impl WindowsDirectSink {
             resources,
         })
     }
+
+    pub fn with_shared(
+        wallpaper_hwnd: Arc<std::sync::atomic::AtomicIsize>,
+        #[cfg(windows)]
+        renderer: Arc<Mutex<Option<D3D11Renderer>>>,
+        _throttler: Arc<Throttler>,
+        resources: ResourceManager,
+    ) -> Self {
+        Self {
+            wallpaper_hwnd,
+            #[cfg(windows)]
+            renderer,
+            #[cfg(windows)]
+            throttler: _throttler,
+            resources,
+        }
+    }
 }
 
 impl Drop for WindowsDirectSink {
     fn drop(&mut self) {
         #[cfg(windows)]
-        drop(self.renderer.take());
+        let _ = self.renderer.lock().take();
     }
 }
 
@@ -88,35 +106,27 @@ impl FrameSink for WindowsDirectSink {
         #[cfg(windows)]
         {
             if self.throttler.is_paused() {
-                // Throttled: wait in 50ms intervals until resumed so the frame is not dropped (essential for static images)
-                while self.throttler.is_paused() {
-                    if self.wallpaper_hwnd != 0 {
-                        let is_alive = unsafe {
-                            windows::Win32::UI::WindowsAndMessaging::IsWindow(
-                                windows::Win32::Foundation::HWND(self.wallpaper_hwnd as *mut _),
-                            ).as_bool()
-                        };
-                        if !is_alive {
-                            return Ok(());
-                        }
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
+                // Batch 2 / C2 fix: do NOT block conductor thread in a sleep loop.
+                // Return Ok(()) immediately so conductor stays responsive to IPC commands (SetWallpaper/Stop).
+                // Conductor is notified via PlatformEvent::Pause and suspends at 0.00% CPU.
+                // Upon resume, PlatformEvent::Resume / Redraw triggers re-presentation of last_frame.
+                return Ok(());
             }
 
-            let renderer_lock = match &self.renderer {
+
+            let mut renderer_guard = self.renderer.lock();
+            let renderer = match renderer_guard.as_mut() {
                 Some(r) => r,
                 None => return Err(MediaError::GpuUpload("D3D11 Renderer not initialized".into())),
             };
 
-            let mut renderer = renderer_lock.lock();
-
             // 1. Adjust swapchain buffers if window dimensions changed
-            if self.wallpaper_hwnd != 0 {
+            let current_hwnd = self.wallpaper_hwnd.load(std::sync::atomic::Ordering::Relaxed);
+            if current_hwnd != 0 {
                 let mut rc: windows::Win32::Foundation::RECT = unsafe { std::mem::zeroed() };
                 let ok = unsafe {
                     windows::Win32::UI::WindowsAndMessaging::GetClientRect(
-                        windows::Win32::Foundation::HWND(self.wallpaper_hwnd as *mut _),
+                        windows::Win32::Foundation::HWND(current_hwnd as *mut _),
                         &mut rc,
                     )
                 };

@@ -10,6 +10,7 @@ use nativis_transport_shm::ShmSink;
 
 pub struct KdePlatform {
     installed_plugin_dir: PathBuf,
+    event_sender: Option<nativis_core::platform::PlatformEventSender>,
 }
 
 const METADATA_JSON: &[u8] = include_bytes!("../../../../platforms/kde-x11/metadata.json");
@@ -49,8 +50,10 @@ impl KdePlatform {
 
         Self {
             installed_plugin_dir,
+            event_sender: None,
         }
     }
+
 
     fn check_and_install_bundle(&self, force: bool) -> Result<bool> {
         let bundle_dir = find_bundle_dir();
@@ -143,6 +146,17 @@ impl Platform for KdePlatform {
         Ok(())
     }
 
+    fn set_event_sender(&mut self, sender: nativis_core::platform::PlatformEventSender) {
+        let sender_clone = sender.clone();
+        std::thread::Builder::new()
+            .name("nativis-dbus-screensaver".into())
+            .spawn(move || {
+                run_screensaver_monitor(sender_clone);
+            })
+            .ok();
+        self.event_sender = Some(sender);
+    }
+
     fn create_sink(&self, resources: &ResourceManager) -> Result<Box<dyn FrameSink>> {
         // Create an SHM region big enough for a 4K frame (3840 * 2160 * 4 bytes + some padding for headers)
         let shm_size = (3840 * 2160 * 4) + 4096;
@@ -151,6 +165,38 @@ impl Platform for KdePlatform {
         Ok(Box::new(sink))
     }
 }
+
+/// Listens for freedesktop ScreenSaver ActiveChanged signals to pause/resume playback
+/// when the screen locks or display enters sleep mode (0.00% CPU when occluded).
+fn run_screensaver_monitor(sender: nativis_core::platform::PlatformEventSender) {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    let child = Command::new("dbus-monitor")
+        .arg("--session")
+        .arg("type='signal',interface='org.freedesktop.ScreenSaver',member='ActiveChanged'")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn();
+
+    if let Ok(mut child) = child {
+        if let Some(stdout) = child.stdout.take() {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines().flatten() {
+                let trimmed = line.trim();
+                if trimmed.contains("boolean true") {
+                    info!("Linux ScreenSaver active: pausing desktop wallpaper (0.00% CPU)");
+                    let _ = sender.send(nativis_core::platform::PlatformEvent::Pause);
+                } else if trimmed.contains("boolean false") {
+                    info!("Linux ScreenSaver inactive: resuming desktop wallpaper");
+                    let _ = sender.send(nativis_core::platform::PlatformEvent::Resume);
+                }
+            }
+        }
+        let _ = child.kill();
+    }
+}
+
 
 impl Drop for KdePlatform {
     fn drop(&mut self) {
