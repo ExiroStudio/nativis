@@ -19,6 +19,7 @@ extern "C" {
     void     nativis_render(void* ctx);
     void     nativis_end_frame(void* ctx);
     uint64_t nativis_get_frame_id(void* ctx);  // Phase 1: frame change detection
+    uint64_t nativis_wait_frame(void* ctx, uint64_t last_seen_id, uint32_t timeout_ms); // Item 5: futex wait
 
     // Fase 5: Generic plane-based FFI
     uint32_t nativis_get_format(void* ctx);
@@ -32,16 +33,11 @@ extern "C" {
 #define NATIVIS_FORMAT_NV12     2
 
 // ---------------------------------------------------------------------------
-// FrameWatcher — Phase 1
+// FrameWatcher — Phase 1 & Item 5
 //
-// Runs on a dedicated thread. Polls nativis_get_frame_id() in a tight-but-
-// yielding loop and emits newFrameAvailable() only when the id changes.
-//
-// Why a thread and not futex?
-//   Runtime and plugin run in different processes. There is no shared address
-//   space for a direct callback. A lightweight thread is the minimal cross-
-//   process solution. msleep(4) gives ~240 Hz poll ceiling — well above any
-//   realistic content frame rate — while burning near-zero CPU when idle.
+// Runs on a dedicated thread. Blocks on nativis_wait_frame() (Linux futex on
+// lower 32-bits of frame_id at SHM offset 8) and emits newFrameAvailable()
+// only when the id changes. Replaces 240 Hz busy polling with 0 wakeups/s when idle.
 // ---------------------------------------------------------------------------
 class FrameWatcher : public QThread
 {
@@ -63,8 +59,8 @@ protected:
         int debugEmitCount = 0; // TEMP: cap logging so video framerate doesn't flood journalctl
 
         while (m_running.load(std::memory_order_relaxed)) {
-            quint64 current = nativis_get_frame_id(m_ctx);
-            if (current != lastSeen) {
+            quint64 current = nativis_wait_frame(m_ctx, lastSeen, 1000);
+            if (current != lastSeen && current != 0) {
                 lastSeen = current;
                 if (debugEmitCount < 20) {
                     qDebug() << "[nativis-debug] FrameWatcher emit newFrameAvailable, frameId=" << current
@@ -73,7 +69,6 @@ protected:
                 }
                 emit newFrameAvailable(current);
             }
-            msleep(4); // ~240 Hz ceiling, negligible CPU when idle
         }
     }
 

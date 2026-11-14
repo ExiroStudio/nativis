@@ -10,4 +10,5 @@ nativis-rhi      = { workspace = true }
 anyhow           = { workspace = true }
 thiserror        = { workspace = true }
 tracing          = { workspace = true }
+crossbeam-channel = { workspace = true }
 

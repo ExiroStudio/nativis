@@ -19,6 +19,12 @@ use windows::{
                 SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
             },
         },
+        Devices::Display::{
+            GetDisplayConfigBufferSizes, QueryDisplayConfig, DisplayConfigGetDeviceInfo,
+            QDC_ONLY_ACTIVE_PATHS, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_MODE_INFO,
+            DISPLAYCONFIG_TARGET_DEVICE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+            DISPLAYCONFIG_DEVICE_INFO_HEADER,
+        },
     },
 };
 
@@ -32,6 +38,9 @@ pub struct MonitorDescriptor {
     pub is_primary: bool,
     pub dpi_x: u32,
     pub dpi_y: u32,
+    pub device_id: String,
+    pub friendly_name: String,
+    pub refresh_rate_mhz: u32,
 }
 
 /// Enable Per-Monitor v2 DPI awareness for pixel-perfect multi-monitor rendering.
@@ -84,6 +93,9 @@ pub fn enumerate_monitors() -> Vec<MonitorDescriptor> {
                     is_primary,
                     dpi_x,
                     dpi_y,
+                    device_id: String::new(),
+                    friendly_name: String::new(),
+                    refresh_rate_mhz: 60000,
                 };
 
                 info!(
@@ -105,7 +117,7 @@ pub fn enumerate_monitors() -> Vec<MonitorDescriptor> {
             BOOL(1) // Continue enumeration
         }
 
-        let mut monitors = Vec::new();
+        let mut monitors: Vec<MonitorDescriptor> = Vec::new();
         unsafe {
             let _ = EnumDisplayMonitors(
                 HDC::default(),
@@ -114,6 +126,28 @@ pub fn enumerate_monitors() -> Vec<MonitorDescriptor> {
                 LPARAM(&mut monitors as *mut _ as isize),
             );
         }
+
+        let paths = query_display_paths();
+        for (i, m) in monitors.iter_mut().enumerate() {
+            if let Some(p) = paths.get(i) {
+                if !p.device_path.is_empty() {
+                    m.device_id = p.device_path.clone();
+                } else {
+                    m.device_id = format!("win-monitor-{}", i);
+                }
+                if !p.friendly_name.is_empty() {
+                    m.friendly_name = p.friendly_name.clone();
+                } else {
+                    m.friendly_name = format!("Display {}", i + 1);
+                }
+                m.refresh_rate_mhz = p.refresh_rate_mhz;
+            } else {
+                m.device_id = format!("win-monitor-{}", i);
+                m.friendly_name = format!("Display {}", i + 1);
+                m.refresh_rate_mhz = 60000;
+            }
+        }
+
         monitors
     }
     #[cfg(not(windows))]
@@ -142,3 +176,77 @@ pub fn get_virtual_screen_bounds() -> (i32, i32, u32, u32) {
         (0, 0, 1920, 1080)
     }
 }
+
+/// Query active display paths via Windows QueryDisplayConfig API.
+/// Retrieves accurate refresh rates (mHz) and device paths (EDID/target device path).
+#[cfg(windows)]
+#[derive(Debug, Clone, Default)]
+pub struct DisplayPathDetails {
+    pub device_path: String,
+    pub friendly_name: String,
+    pub refresh_rate_mhz: u32,
+}
+
+#[cfg(windows)]
+pub fn query_display_paths() -> Vec<DisplayPathDetails> {
+    unsafe {
+        let mut path_count = 0u32;
+        let mut mode_count = 0u32;
+        if GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut path_count, &mut mode_count).is_err() {
+            return Vec::new();
+        }
+        let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); path_count as usize];
+        let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); mode_count as usize];
+        if QueryDisplayConfig(
+            QDC_ONLY_ACTIVE_PATHS,
+            &mut path_count,
+            paths.as_mut_ptr(),
+            &mut mode_count,
+            modes.as_mut_ptr(),
+            None,
+        ).is_err() {
+            return Vec::new();
+        }
+        paths.truncate(path_count as usize);
+
+        let mut results = Vec::new();
+        for path in paths {
+            let mut target_name = DISPLAYCONFIG_TARGET_DEVICE_NAME {
+                header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
+                    r#type: DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+                    size: std::mem::size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32,
+                    adapterId: path.targetInfo.adapterId,
+                    id: path.targetInfo.id,
+                },
+                ..Default::default()
+            };
+
+            let (friendly_name, device_path) = if DisplayConfigGetDeviceInfo(&mut target_name.header) == 0 {
+                let f_name = String::from_utf16_lossy(&target_name.monitorFriendlyDeviceName)
+                    .trim_matches('\0')
+                    .to_string();
+                let d_path = String::from_utf16_lossy(&target_name.monitorDevicePath)
+                    .trim_matches('\0')
+                    .to_string();
+                (f_name, d_path)
+            } else {
+                (String::new(), String::new())
+            };
+
+            let refresh_rate_mhz = if path.targetInfo.refreshRate.Denominator > 0 {
+                ((path.targetInfo.refreshRate.Numerator as u64 * 1000)
+                    / path.targetInfo.refreshRate.Denominator as u64) as u32
+            } else {
+                60000
+            };
+
+            results.push(DisplayPathDetails {
+                device_path,
+                friendly_name,
+                refresh_rate_mhz,
+            });
+        }
+        results
+    }
+}
+

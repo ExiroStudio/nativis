@@ -248,8 +248,22 @@ fn run_daemon(initial_wallpaper: Option<&str>) -> Result<()> {
 
     // 1. Initialize Platform and Sink (keep platform alive for daemon lifetime)
     let mut platform = create_platform();
+
+    // Wire platform events into conductor command channel (Batch 2)
+    let (platform_tx, platform_rx) = unbounded::<nativis_core::platform::PlatformEvent>();
+    platform.set_event_sender(platform_tx);
+    let cmd_tx_bridge = command_tx.clone();
+    std::thread::Builder::new()
+        .name("nativis-platform-events".into())
+        .spawn(move || {
+            while let Ok(event) = platform_rx.recv() {
+                let _ = cmd_tx_bridge.send(RuntimeCommand::PlatformEvent(event));
+            }
+        })?;
+
     platform.bootstrap(false)?;
     let sink = platform.create_sink(&resources)?;
+
 
     // 2. Start IPC Server Listener
     let _ipc_handle = start_ipc_server(
@@ -298,7 +312,7 @@ fn run_daemon(initial_wallpaper: Option<&str>) -> Result<()> {
     // Pass resources and clock into the conductor so it can handle OpenAndSwap
     // commands atomically (close old → open new, no parallel decode window).
     let runtime_resources = (*resources).clone();
-    runtime.run_with_commands(backend, sink, command_rx, runtime_resources, clock)?;
+    runtime.run_with_commands(backend, sink, command_rx, runtime_resources, clock, Some(asset_path))?;
 
     Ok(())
 }
@@ -453,6 +467,19 @@ fn handle_ipc_command(
                 Err(e) => return IpcResponse::Error { message: format!("Invalid URI {}: {}", uri, e) },
             };
 
+            // C3: Cheap probe first before touching or closing anything
+            let file_path = std::path::Path::new(asset_path.path());
+            if !file_path.exists() {
+                return IpcResponse::Error {
+                    message: format!("Wallpaper file does not exist: {}", file_path.display()),
+                };
+            }
+            if let Err(e) = std::fs::File::open(file_path) {
+                return IpcResponse::Error {
+                    message: format!("Cannot read wallpaper file {}: {}", file_path.display(), e),
+                };
+            }
+
             let mut plugin_manager = PluginManager::new();
             plugin_manager.register("image_backend", || Box::new(ImageBackend::new()));
             #[cfg(any(not(target_os = "windows"), feature = "video"))]
@@ -466,22 +493,41 @@ fn handle_ipc_command(
                 None => return IpcResponse::Error { message: format!("No plugin found for {}", uri) },
             };
 
-            *current_wallpaper.write() = Some(uri.clone());
-            let _ = command_tx.send(RuntimeCommand::OpenAndSwap { backend, source: asset_path });
-
-            // Persist wallpaper choice and scaling mode in user config (Phase 3)
-            let mut cfg = UserConfig::load();
-            cfg.active_wallpaper = uri.clone();
-            if let Some(ref s) = scaling {
-                cfg.scaling = s.clone();
+            let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+            if let Err(e) = command_tx.send(RuntimeCommand::OpenAndSwap {
+                backend,
+                source: asset_path,
+                reply: Some(reply_tx),
+            }) {
+                return IpcResponse::Error { message: format!("Failed to dispatch command to runtime: {}", e) };
             }
-            let _ = cfg.save();
 
-            let target_desc = match monitor {
-                Some(ref m) => format!("monitor {}", m),
-                None => "all outputs".to_string(),
-            };
-            IpcResponse::Ok { message: format!("Wallpaper set to {} on {}", uri, target_desc) }
+            // C3: Await confirmation from conductor before updating state or config
+            match reply_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                Ok(Ok(())) => {
+                    *current_wallpaper.write() = Some(uri.clone());
+
+                    // Persist wallpaper choice and scaling mode in user config ONLY on verified success (C3)
+                    let mut cfg = UserConfig::load();
+                    cfg.active_wallpaper = uri.clone();
+                    if let Some(ref s) = scaling {
+                        cfg.scaling = s.clone();
+                    }
+                    let _ = cfg.save();
+
+                    let target_desc = match monitor {
+                        Some(ref m) => format!("monitor {}", m),
+                        None => "all outputs".to_string(),
+                    };
+                    IpcResponse::Ok { message: format!("Wallpaper set to {} on {}", uri, target_desc) }
+                }
+                Ok(Err(err)) => {
+                    IpcResponse::Error { message: format!("Failed to open wallpaper: {}", err) }
+                }
+                Err(_) => {
+                    IpcResponse::Error { message: "Timed out waiting for wallpaper backend to initialize".into() }
+                }
+            }
         }
 
         IpcCommand::Pause => {

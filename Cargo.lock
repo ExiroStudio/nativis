@@ -2999,6 +2999,7 @@ name = "nativis-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crossbeam-channel",
  "nativis-asset",
  "nativis-protocol",
  "nativis-rhi",
@@ -3086,6 +3087,7 @@ name = "nativis-platform-windows"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crossbeam-channel",
  "nativis-core",
  "parking_lot",
  "tracing",

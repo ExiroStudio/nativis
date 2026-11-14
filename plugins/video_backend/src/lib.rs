@@ -523,6 +523,21 @@ impl MediaBackend for VideoBackend {
         }
     }
 
+    fn next_deadline(&self) -> Option<Duration> {
+        // Items 6 & 8: If cached lookahead frame is waiting for its presentation PTS,
+        // tell conductor the exact sleep duration needed instead of fixed 60 Hz polling.
+        if let Some(ref cached) = self.cached_frame {
+            let frame_pts = cached.pts_duration();
+            if frame_pts > self.accumulated_time {
+                Some(frame_pts - self.accumulated_time)
+            } else {
+                Some(Duration::ZERO)
+            }
+        } else {
+            None
+        }
+    }
+
     fn close(&mut self) {
         if let Some(stop) = self.stop_signal.take() {
             stop.store(true, Ordering::Release);
@@ -694,6 +709,14 @@ fn decoder_thread(
         let mut scaler: Option<(Pixel, u32, u32, Scaler)> = None;
         let mut restart_with_software = false;
 
+        // Item 3: 3-slot pre-allocated planar buffer pool
+        struct PlanarSlot {
+            y: Arc<[u8]>,
+            uv: Arc<[u8]>,
+        }
+        let mut pool: [Option<PlanarSlot>; 3] = [None, None, None];
+        let mut pool_idx = 0usize;
+
         'packets: for (stream_ref, packet) in ictx.packets() {
             if stop.load(Ordering::Acquire) { break 'outer; }
             if stream_ref.index() != video_index { continue; }
@@ -764,14 +787,12 @@ fn decoder_thread(
                 }
 
                 let mut scale_done = t_transfer_done;
-                let (y_stride, uv_stride, y_plane, uv_plane) = if source_format == Pixel::NV12 {
-                    let y_plane: Arc<[u8]> = Arc::from(source.data(0));
-                    let uv_plane: Arc<[u8]> = Arc::from(source.data(1));
+                let (y_stride, uv_stride, y_src, uv_src) = if source_format == Pixel::NV12 {
                     (
                         source.stride(0) as u32,
                         source.stride(1) as u32,
-                        y_plane,
-                        uv_plane,
+                        source.data(0),
+                        source.data(1),
                     )
                 } else {
                     let needs_scaler = scaler.as_ref().map_or(true, |(format, width, height, _)| {
@@ -806,16 +827,51 @@ fn decoder_thread(
                         continue;
                     }
                     scale_done = Instant::now();
-                    let y_plane: Arc<[u8]> = Arc::from(nv12.data(0));
-                    let uv_plane: Arc<[u8]> = Arc::from(nv12.data(1));
                     (
                         nv12.stride(0) as u32,
                         nv12.stride(1) as u32,
-                        y_plane,
-                        uv_plane,
+                        nv12.data(0),
+                        nv12.data(1),
                     )
                 };
+
+                // Item 3: 3-slot pre-allocated planar buffer pool (eliminates 308,000 page faults).
+                // Reuses existing heap slices via Arc::get_mut when strong count drops back to 1.
+                let (y_plane, uv_plane) = {
+                    let slot = &mut pool[pool_idx];
+                    pool_idx = (pool_idx + 1) % 3;
+
+                    let reusable = match slot {
+                        Some(ref mut s) => {
+                            if s.y.len() == y_src.len() && s.uv.len() == uv_src.len() {
+                                if let (Some(y_mut), Some(uv_mut)) = (Arc::get_mut(&mut s.y), Arc::get_mut(&mut s.uv)) {
+                                    y_mut.copy_from_slice(y_src);
+                                    uv_mut.copy_from_slice(uv_src);
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        }
+                        None => false,
+                    };
+
+                    if reusable {
+                        let s = slot.as_ref().unwrap();
+                        (Arc::clone(&s.y), Arc::clone(&s.uv))
+                    } else {
+                        let y: Arc<[u8]> = Arc::from(y_src);
+                        let uv: Arc<[u8]> = Arc::from(uv_src);
+                        let y_clone = Arc::clone(&y);
+                        let uv_clone = Arc::clone(&uv);
+                        *slot = Some(PlanarSlot { y, uv });
+                        (y_clone, uv_clone)
+                    }
+                };
                 let copy_done = Instant::now();
+
 
                 let decode_us = t_decode_done.duration_since(t0).as_micros() as u64;
                 let transfer_us = t_transfer_done.duration_since(t_decode_done).as_micros() as u64;

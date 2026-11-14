@@ -229,5 +229,13 @@ pub trait MediaBackend: Send + Sync {
 
     /// Release all GPU resources and close decoders.
     fn close(&mut self);
+
+    /// Duration until the next frame is due for presentation (Phase 4 / Items 6 & 8).
+    /// Default: `None` = runtime uses its configured fixed target_fps pacing.
+    /// Backends implement this based on stream PTS pacing to eliminate redundant wakeups.
+    fn next_deadline(&self) -> Option<Duration> {
+        None
+    }
 }
+
 
