@@ -61,8 +61,8 @@ impl Platform for WindowsPlatform {
         #[cfg(windows)]
         if let Some(ref w) = self.workerw {
             if let Some(ref r) = *w.renderer.lock() {
-                let dev_ptr = windows::core::Interface::as_raw(&r.device()) as usize;
-                let ctx_ptr = windows::core::Interface::as_raw(&r.context()) as usize;
+                let dev_ptr = windows::core::Interface::as_raw(r.device()) as usize;
+                let ctx_ptr = windows::core::Interface::as_raw(r.context()) as usize;
                 resources.set_gpu_device(nativis_core::resource::GpuDeviceResource {
                     device_ptr: dev_ptr,
                     device_context_ptr: ctx_ptr,

@@ -480,10 +480,10 @@ unsafe extern "system" fn recovery_wndproc(
                                             + 1;
                                         if let Some(res) = ctx.resources.lock().as_ref() {
                                             let dev_ptr =
-                                                windows::core::Interface::as_raw(&new_r.device())
+                                                windows::core::Interface::as_raw(new_r.device())
                                                     as usize;
                                             let ctx_ptr =
-                                                windows::core::Interface::as_raw(&new_r.context())
+                                                windows::core::Interface::as_raw(new_r.context())
                                                     as usize;
                                             res.set_gpu_device(
                                                 nativis_core::resource::GpuDeviceResource {

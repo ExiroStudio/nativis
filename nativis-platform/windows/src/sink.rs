@@ -221,4 +221,18 @@ impl FrameSink for WindowsDirectSink {
             Ok(())
         }
     }
+
+    fn capabilities(&self) -> nativis_core::contract::SinkCapabilities {
+        nativis_core::contract::SinkCapabilities {
+            accepted_kinds: vec![
+                nativis_protocol::NATIVIS_SURFACE_KIND_D3D11_SHARED,
+                nativis_protocol::NATIVIS_SURFACE_KIND_CPU_PLANAR,
+                nativis_protocol::NATIVIS_SURFACE_KIND_CPU_BUFFER,
+            ],
+            accepted_formats: vec![
+                nativis_protocol::NATIVIS_FORMAT_NV12,
+                nativis_protocol::NATIVIS_FORMAT_RGBA8888,
+            ],
+        }
+    }
 }

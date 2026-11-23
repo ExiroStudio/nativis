@@ -13,31 +13,30 @@ use windows::{
         Graphics::{
             Direct3D::{
                 Fxc::{D3DCompile, D3DCOMPILE_ENABLE_STRICTNESS, D3DCOMPILE_OPTIMIZATION_LEVEL3},
-                ID3DBlob, D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_11_0,
-                D3D_FEATURE_LEVEL_11_1, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
-                D3D11_SRV_DIMENSION_TEXTURE2D,
+                ID3DBlob, D3D11_SRV_DIMENSION_TEXTURE2D, D3D_DRIVER_TYPE_HARDWARE,
+                D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
+                D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             },
             Direct3D11::{
                 D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread,
                 ID3D11PixelShader, ID3D11RenderTargetView, ID3D11SamplerState,
                 ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11VertexShader,
-                D3D11_BIND_SHADER_RESOURCE, D3D11_COMPARISON_NEVER,
-                D3D11_CPU_ACCESS_WRITE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_FLOAT32_MAX, D3D11_MAP_WRITE_DISCARD,
-                D3D11_MAPPED_SUBRESOURCE, D3D11_SAMPLER_DESC, D3D11_SDK_VERSION,
-                D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_TEXTURE2D_DESC,
-                D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_USAGE_DEFAULT, D3D11_USAGE_DYNAMIC,
-                D3D11_VIEWPORT,
+                D3D11_BIND_SHADER_RESOURCE, D3D11_COMPARISON_NEVER, D3D11_CPU_ACCESS_WRITE,
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_FILTER_MIN_MAG_MIP_LINEAR,
+                D3D11_FLOAT32_MAX, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_WRITE_DISCARD,
+                D3D11_SAMPLER_DESC, D3D11_SDK_VERSION, D3D11_SHADER_RESOURCE_VIEW_DESC,
+                D3D11_TEXTURE2D_DESC, D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_USAGE_DEFAULT,
+                D3D11_USAGE_DYNAMIC, D3D11_VIEWPORT,
             },
             Dxgi::{
                 Common::{
-                    DXGI_ALPHA_MODE_UNSPECIFIED, DXGI_FORMAT_B8G8R8A8_UNORM,
-                    DXGI_FORMAT_NV12, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8_UNORM,
-                    DXGI_FORMAT_R8_UNORM, DXGI_SAMPLE_DESC,
+                    DXGI_ALPHA_MODE_UNSPECIFIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12,
+                    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
+                    DXGI_SAMPLE_DESC,
                 },
-                IDXGIAdapter, IDXGIDevice, IDXGIFactory2, IDXGISwapChain1,
-                DXGI_MWA_NO_ALT_ENTER, DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
-                DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                IDXGIAdapter, IDXGIDevice, IDXGIFactory2, IDXGISwapChain1, DXGI_MWA_NO_ALT_ENTER,
+                DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG,
+                DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT,
             },
         },
     },
@@ -121,7 +120,10 @@ unsafe fn compile_shader(source: &[u8], entry_point: &str, target: &str) -> Resu
 
     if let Err(e) = hr {
         if let Some(err) = error_blob {
-            let msg = std::slice::from_raw_parts(err.GetBufferPointer() as *const u8, err.GetBufferSize());
+            let msg = std::slice::from_raw_parts(
+                err.GetBufferPointer() as *const u8,
+                err.GetBufferSize(),
+            );
             let err_str = String::from_utf8_lossy(msg);
             bail!("Shader compilation failed ({}): {}", target, err_str);
         }
@@ -182,7 +184,10 @@ pub struct D3D11Renderer {
 #[cfg(windows)]
 impl D3D11Renderer {
     pub fn new(hwnd: HWND, width: u32, height: u32) -> Result<Self> {
-        info!("Initializing Direct3D 11 renderer for HWND: 0x{:X} ({}x{})...", hwnd.0 as usize, width, height);
+        info!(
+            "Initializing Direct3D 11 renderer for HWND: 0x{:X} ({}x{})...",
+            hwnd.0 as usize, width, height
+        );
 
         let width = if width == 0 { 1920 } else { width };
         let height = if height == 0 { 1080 } else { height };
@@ -203,7 +208,8 @@ impl D3D11Renderer {
                 Some(&mut device_opt),
                 Some(&mut feature_level),
                 Some(&mut context_opt),
-            ).context("D3D11CreateDevice failed")?;
+            )
+            .context("D3D11CreateDevice failed")?;
 
             let device = device_opt.context("D3D11Device was null")?;
             let context = context_opt.context("D3D11DeviceContext was null")?;
@@ -214,7 +220,10 @@ impl D3D11Renderer {
                 info!("Direct3D 11 Multithread protection enabled on device context");
             }
 
-            info!("Direct3D 11 device created successfully (Feature Level: {:?})", feature_level);
+            info!(
+                "Direct3D 11 device created successfully (Feature Level: {:?})",
+                feature_level
+            );
 
             // 2. Query DXGI Factory and create Flip Discard SwapChain
             let dxgi_device: IDXGIDevice = device.cast()?;
@@ -226,7 +235,10 @@ impl D3D11Renderer {
                 Height: height,
                 Format: DXGI_FORMAT_B8G8R8A8_UNORM,
                 Stereo: false.into(),
-                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
                 BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
                 BufferCount: 2, // Modern 2-buffer Flip Discard Ring
                 Scaling: DXGI_SCALING_STRETCH,
@@ -235,13 +247,9 @@ impl D3D11Renderer {
                 Flags: 0,
             };
 
-            let swap_chain = dxgi_factory.CreateSwapChainForHwnd(
-                &device,
-                hwnd,
-                &swap_chain_desc,
-                None,
-                None,
-            ).context("CreateSwapChainForHwnd failed")?;
+            let swap_chain = dxgi_factory
+                .CreateSwapChainForHwnd(&device, hwnd, &swap_chain_desc, None, None)
+                .context("CreateSwapChainForHwnd failed")?;
 
             let _ = dxgi_factory.MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
 
@@ -283,7 +291,10 @@ impl D3D11Renderer {
             let vs_blob = compile_shader(VS_SOURCE, "main", "vs_5_0")?;
             let mut vs_opt: Option<ID3D11VertexShader> = None;
             device.CreateVertexShader(
-                std::slice::from_raw_parts(vs_blob.GetBufferPointer() as _, vs_blob.GetBufferSize()),
+                std::slice::from_raw_parts(
+                    vs_blob.GetBufferPointer() as _,
+                    vs_blob.GetBufferSize(),
+                ),
                 None,
                 Some(&mut vs_opt),
             )?;
@@ -292,7 +303,10 @@ impl D3D11Renderer {
             let ps_nv12_blob = compile_shader(PS_NV12_SOURCE, "main", "ps_5_0")?;
             let mut ps_nv12_opt: Option<ID3D11PixelShader> = None;
             device.CreatePixelShader(
-                std::slice::from_raw_parts(ps_nv12_blob.GetBufferPointer() as _, ps_nv12_blob.GetBufferSize()),
+                std::slice::from_raw_parts(
+                    ps_nv12_blob.GetBufferPointer() as _,
+                    ps_nv12_blob.GetBufferSize(),
+                ),
                 None,
                 Some(&mut ps_nv12_opt),
             )?;
@@ -301,7 +315,10 @@ impl D3D11Renderer {
             let ps_rgba_blob = compile_shader(PS_RGBA_SOURCE, "main", "ps_5_0")?;
             let mut ps_rgba_opt: Option<ID3D11PixelShader> = None;
             device.CreatePixelShader(
-                std::slice::from_raw_parts(ps_rgba_blob.GetBufferPointer() as _, ps_rgba_blob.GetBufferSize()),
+                std::slice::from_raw_parts(
+                    ps_rgba_blob.GetBufferPointer() as _,
+                    ps_rgba_blob.GetBufferSize(),
+                ),
                 None,
                 Some(&mut ps_rgba_opt),
             )?;
@@ -363,7 +380,8 @@ impl D3D11Renderer {
 
             let back_buffer: ID3D11Texture2D = self.swap_chain.GetBuffer(0)?;
             let mut rtv_opt: Option<ID3D11RenderTargetView> = None;
-            self.device.CreateRenderTargetView(&back_buffer, None, Some(&mut rtv_opt))?;
+            self.device
+                .CreateRenderTargetView(&back_buffer, None, Some(&mut rtv_opt))?;
             self.render_target_view = Some(rtv_opt.context("Re-creating RenderTargetView failed")?);
 
             let viewport = D3D11_VIEWPORT {
@@ -406,21 +424,30 @@ impl D3D11Renderer {
                 if self.y_srv.is_none() || self.uv_srv.is_none() {
                     bail!("NV12 textures not initialized");
                 }
-                (&self.pixel_shader_nv12, [self.y_srv.clone(), self.uv_srv.clone()])
+                (
+                    &self.pixel_shader_nv12,
+                    [self.y_srv.clone(), self.uv_srv.clone()],
+                )
             }
             LastDrawKind::ZeroCopy => {
                 if self.nv12_gpu_y_srv.is_none() || self.nv12_gpu_uv_srv.is_none() {
                     bail!("Zero-copy NV12 textures not initialized");
                 }
-                (&self.pixel_shader_nv12, [self.nv12_gpu_y_srv.clone(), self.nv12_gpu_uv_srv.clone()])
+                (
+                    &self.pixel_shader_nv12,
+                    [self.nv12_gpu_y_srv.clone(), self.nv12_gpu_uv_srv.clone()],
+                )
             }
         };
         let n = if kind == LastDrawKind::Rgba { 1 } else { 2 };
-        self.context.OMSetRenderTargets(Some(std::slice::from_ref(&self.render_target_view)), None);
-        self.context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        self.context
+            .OMSetRenderTargets(Some(std::slice::from_ref(&self.render_target_view)), None);
+        self.context
+            .IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         self.context.VSSetShader(&self.vertex_shader, None);
         self.context.PSSetShader(ps, None);
-        self.context.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
+        self.context
+            .PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
         self.context.PSSetShaderResources(0, Some(&srvs[..n]));
         self.context.Draw(3, 0);
         self.last_draw_kind = kind;
@@ -430,7 +457,9 @@ impl D3D11Renderer {
     /// Redraws the last frame from the persistent textures (no CPU data needed) and presents.
     /// Required because the swapchain is FLIP_DISCARD: the back buffer is undefined after Present.
     pub fn re_present_last_frame(&mut self) -> Result<()> {
-        unsafe { self.draw_pipeline(self.last_draw_kind)?; }
+        unsafe {
+            self.draw_pipeline(self.last_draw_kind)?;
+        }
         self.present()
     }
 
@@ -454,18 +483,23 @@ impl D3D11Renderer {
                     MipLevels: 1,
                     ArraySize: 1,
                     Format: DXGI_FORMAT_R8_UNORM,
-                    SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
                     Usage: D3D11_USAGE_DYNAMIC,
                     BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
                     CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
                     MiscFlags: 0,
                 };
                 let mut y_tex: Option<ID3D11Texture2D> = None;
-                self.device.CreateTexture2D(&y_desc, None, Some(&mut y_tex))?;
+                self.device
+                    .CreateTexture2D(&y_desc, None, Some(&mut y_tex))?;
                 let y_texture = y_tex.unwrap();
 
                 let mut y_srv: Option<ID3D11ShaderResourceView> = None;
-                self.device.CreateShaderResourceView(&y_texture, None, Some(&mut y_srv))?;
+                self.device
+                    .CreateShaderResourceView(&y_texture, None, Some(&mut y_srv))?;
 
                 let uv_desc = D3D11_TEXTURE2D_DESC {
                     Width: uv_w,
@@ -473,18 +507,23 @@ impl D3D11Renderer {
                     MipLevels: 1,
                     ArraySize: 1,
                     Format: DXGI_FORMAT_R8G8_UNORM,
-                    SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
                     Usage: D3D11_USAGE_DYNAMIC,
                     BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
                     CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
                     MiscFlags: 0,
                 };
                 let mut uv_tex: Option<ID3D11Texture2D> = None;
-                self.device.CreateTexture2D(&uv_desc, None, Some(&mut uv_tex))?;
+                self.device
+                    .CreateTexture2D(&uv_desc, None, Some(&mut uv_tex))?;
                 let uv_texture = uv_tex.unwrap();
 
                 let mut uv_srv: Option<ID3D11ShaderResourceView> = None;
-                self.device.CreateShaderResourceView(&uv_texture, None, Some(&mut uv_srv))?;
+                self.device
+                    .CreateShaderResourceView(&uv_texture, None, Some(&mut uv_srv))?;
 
                 self.y_texture = Some(y_texture);
                 self.y_srv = y_srv;
@@ -497,7 +536,8 @@ impl D3D11Renderer {
             // 2. Upload Y plane data via Map/Unmap
             let y_tex = self.y_texture.as_ref().unwrap();
             let mut mapped_y = D3D11_MAPPED_SUBRESOURCE::default();
-            self.context.Map(y_tex, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped_y))?;
+            self.context
+                .Map(y_tex, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped_y))?;
             let dst_y = mapped_y.pData as *mut u8;
             for row in 0..y_h {
                 let src_offset = (row * y_stride) as usize;
@@ -515,7 +555,8 @@ impl D3D11Renderer {
             // 3. Upload UV plane data via Map/Unmap
             let uv_tex = self.uv_texture.as_ref().unwrap();
             let mut mapped_uv = D3D11_MAPPED_SUBRESOURCE::default();
-            self.context.Map(uv_tex, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped_uv))?;
+            self.context
+                .Map(uv_tex, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped_uv))?;
             let dst_uv = mapped_uv.pData as *mut u8;
             let uv_row_bytes = (uv_w * 2) as usize;
             for row in 0..uv_h {
@@ -539,14 +580,20 @@ impl D3D11Renderer {
 
     pub fn draw_rgba(&mut self, data: &[u8], width: u32, height: u32) -> Result<()> {
         unsafe {
-            if self.last_rgba_w != width || self.last_rgba_h != height || self.rgba_texture.is_none() {
+            if self.last_rgba_w != width
+                || self.last_rgba_h != height
+                || self.rgba_texture.is_none()
+            {
                 let desc = D3D11_TEXTURE2D_DESC {
                     Width: width,
                     Height: height,
                     MipLevels: 1,
                     ArraySize: 1,
                     Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-                    SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
                     Usage: D3D11_USAGE_DYNAMIC,
                     BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
                     CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
@@ -557,7 +604,8 @@ impl D3D11Renderer {
                 let texture = tex.unwrap();
 
                 let mut srv: Option<ID3D11ShaderResourceView> = None;
-                self.device.CreateShaderResourceView(&texture, None, Some(&mut srv))?;
+                self.device
+                    .CreateShaderResourceView(&texture, None, Some(&mut srv))?;
 
                 self.rgba_texture = Some(texture);
                 self.rgba_srv = srv;
@@ -567,7 +615,8 @@ impl D3D11Renderer {
 
             let tex = self.rgba_texture.as_ref().unwrap();
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-            self.context.Map(tex, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))?;
+            self.context
+                .Map(tex, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))?;
             let dst = mapped.pData as *mut u8;
             let row_bytes = (width * 4) as usize;
             for row in 0..height {
@@ -589,12 +638,12 @@ impl D3D11Renderer {
         Ok(())
     }
 
-    pub fn device(&self) -> ID3D11Device {
-        self.device.clone()
+    pub fn device(&self) -> &ID3D11Device {
+        &self.device
     }
 
-    pub fn context(&self) -> ID3D11DeviceContext {
-        self.context.clone()
+    pub fn context(&self) -> &ID3D11DeviceContext {
+        &self.context
     }
 
     pub fn draw_d3d11_texture(
@@ -606,14 +655,20 @@ impl D3D11Renderer {
     ) -> Result<()> {
         unsafe {
             // 1. Recreate NV12 staging texture and SRVs if video size changed
-            if self.last_zero_copy_w != width || self.last_zero_copy_h != height || self.nv12_gpu_texture.is_none() {
+            if self.last_zero_copy_w != width
+                || self.last_zero_copy_h != height
+                || self.nv12_gpu_texture.is_none()
+            {
                 let desc = D3D11_TEXTURE2D_DESC {
                     Width: width,
                     Height: height,
                     MipLevels: 1,
                     ArraySize: 1,
                     Format: DXGI_FORMAT_NV12,
-                    SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
                     Usage: D3D11_USAGE_DEFAULT,
                     BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
                     CPUAccessFlags: 0,
@@ -629,7 +684,11 @@ impl D3D11Renderer {
                 y_srv_desc.Anonymous.Texture2D.MostDetailedMip = 0;
                 y_srv_desc.Anonymous.Texture2D.MipLevels = 1;
                 let mut y_srv: Option<ID3D11ShaderResourceView> = None;
-                self.device.CreateShaderResourceView(&texture, Some(&y_srv_desc), Some(&mut y_srv))?;
+                self.device.CreateShaderResourceView(
+                    &texture,
+                    Some(&y_srv_desc),
+                    Some(&mut y_srv),
+                )?;
 
                 let mut uv_srv_desc = D3D11_SHADER_RESOURCE_VIEW_DESC::default();
                 uv_srv_desc.Format = DXGI_FORMAT_R8G8_UNORM;
@@ -637,7 +696,11 @@ impl D3D11Renderer {
                 uv_srv_desc.Anonymous.Texture2D.MostDetailedMip = 0;
                 uv_srv_desc.Anonymous.Texture2D.MipLevels = 1;
                 let mut uv_srv: Option<ID3D11ShaderResourceView> = None;
-                self.device.CreateShaderResourceView(&texture, Some(&uv_srv_desc), Some(&mut uv_srv))?;
+                self.device.CreateShaderResourceView(
+                    &texture,
+                    Some(&uv_srv_desc),
+                    Some(&mut uv_srv),
+                )?;
 
                 self.nv12_gpu_texture = Some(texture);
                 self.nv12_gpu_y_srv = y_srv;
@@ -651,7 +714,9 @@ impl D3D11Renderer {
             self.context.CopySubresourceRegion(
                 dst_tex,
                 0,
-                0, 0, 0,
+                0,
+                0,
+                0,
                 src_texture,
                 subresource_index,
                 None,
@@ -665,7 +730,8 @@ impl D3D11Renderer {
     pub fn present(&mut self) -> Result<()> {
         unsafe {
             // Present with 1 = sync to display refresh rate (vsync)
-            self.swap_chain.Present(1, DXGI_PRESENT(0))
+            self.swap_chain
+                .Present(1, DXGI_PRESENT(0))
                 .ok()
                 .context("SwapChain Present(1, 0) failed")?;
         }
