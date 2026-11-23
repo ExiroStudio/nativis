@@ -121,7 +121,7 @@ pub extern "C" fn nativis_get_pixels(ctx: *mut c_void) -> *mut u8 {
                             }
                             std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
 
-                            runtime.last_frame_id = header.frame_id;
+                            let mut candidate_ptr = ptr::null_mut();
                             let offset = header.attachment_offset as usize;
                             if handle.size
                                 >= offset
@@ -138,7 +138,7 @@ pub extern "C" fn nativis_get_pixels(ctx: *mut c_void) -> *mut u8 {
                                 };
                                 for att in attachments {
                                     if att.usage == NATIVIS_ATTACHMENT_USAGE_COLOR {
-                                        runtime.active_ptr =
+                                        candidate_ptr =
                                             unsafe { ptr.add(att.data_offset as usize) };
                                         break;
                                     }
@@ -147,7 +147,9 @@ pub extern "C" fn nativis_get_pixels(ctx: *mut c_void) -> *mut u8 {
 
                             std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
                             let seq2 = unsafe { std::ptr::read_volatile(&header.sequence) };
-                            if seq1 == seq2 {
+                            if seq1 == seq2 && !candidate_ptr.is_null() {
+                                runtime.last_frame_id = header.frame_id;
+                                runtime.active_ptr = candidate_ptr;
                                 break;
                             }
                         }
@@ -461,4 +463,87 @@ pub extern "C" fn nativis_get_plane(
         }
     }
     ptr::null_mut()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nativis_transport_shm::ShmSurface;
+
+    #[test]
+    fn test_seqlock_prevents_torn_frame_read() {
+        let shm_name = "/nativis_shm";
+        let size = 65536;
+        let surface = ShmSurface::new(shm_name, size, true).expect("create test SHM");
+        let handle = surface.acquire().expect("acquire handle");
+
+        let header_size = std::mem::size_of::<NativisFrameHeader>();
+        let att_size = std::mem::size_of::<NativisAttachment>();
+        let data_offset = (header_size + att_size) as u32;
+
+        let header = NativisFrameHeader {
+            magic: nativis_protocol::NATIVIS_MAGIC,
+            version: nativis_protocol::NATIVIS_VERSION,
+            frame_id: 10,
+            timestamp: 1000,
+            sequence: 19, // Odd sequence: write in progress!
+            attachment_count: 1,
+            attachment_offset: header_size as u32,
+        };
+        let attachment = NativisAttachment {
+            usage: NATIVIS_ATTACHMENT_USAGE_COLOR,
+            format: nativis_protocol::NATIVIS_FORMAT_RGBA8888,
+            width: 16,
+            height: 16,
+            stride: 64,
+            planes: 1,
+            surface_index: 0,
+            data_offset,
+        };
+
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                &header as *const _ as *const u8,
+                handle.ptr,
+                header_size,
+            );
+            std::ptr::copy_nonoverlapping(
+                &attachment as *const _ as *const u8,
+                handle.ptr.add(header_size),
+                att_size,
+            );
+        }
+
+        let ctx = nativis_create();
+        assert!(!ctx.is_null());
+
+        let pixels = nativis_get_pixels(ctx);
+        let runtime = unsafe { &*(ctx as *const NativisConsumer) };
+
+        // Because sequence was odd (write in progress), active_ptr must NOT point to SHM data_offset
+        assert_ne!(pixels, unsafe { handle.ptr.add(data_offset as usize) });
+        // Instead, pixels must point to the safe fallback buffer
+        assert_eq!(pixels, runtime.fallback_buffer.as_ptr() as *mut u8);
+
+        // Fill test pixel data in SHM
+        unsafe {
+            let data_slice =
+                std::slice::from_raw_parts_mut(handle.ptr.add(data_offset as usize), 64);
+            data_slice.fill(0x42);
+        }
+
+        // Now finalize the write: update sequence to even (sequence = 20)
+        let header_ptr = handle.ptr as *mut NativisFrameHeader;
+        unsafe {
+            (*header_ptr).sequence = 20;
+        }
+
+        let pixels_valid = nativis_get_pixels(ctx);
+        // Now it must point to the verified SHM data, NOT fallback buffer!
+        assert_ne!(pixels_valid, runtime.fallback_buffer.as_ptr() as *mut u8);
+        let read_slice = unsafe { std::slice::from_raw_parts(pixels_valid, 64) };
+        assert_eq!(read_slice, &[0x42; 64]);
+
+        nativis_destroy(ctx);
+    }
 }
