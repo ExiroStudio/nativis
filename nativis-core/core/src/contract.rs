@@ -10,8 +10,8 @@ use thiserror::Error;
 use crate::clock::MediaClock;
 use nativis_asset::AssetPath;
 use nativis_protocol::{
-    NativisSurface, NATIVIS_FORMAT_NV12, NATIVIS_FORMAT_RGBA8888,
-    NATIVIS_SURFACE_KIND_CPU_BUFFER, NATIVIS_SURFACE_KIND_CPU_PLANAR, NATIVIS_SURFACE_KIND_CPU_SHM,
+    NativisSurface, NATIVIS_FORMAT_NV12, NATIVIS_FORMAT_RGBA8888, NATIVIS_SURFACE_KIND_CPU_BUFFER,
+    NATIVIS_SURFACE_KIND_CPU_PLANAR, NATIVIS_SURFACE_KIND_CPU_SHM,
 };
 
 // ── Resource System ──────────────────────────────────────────────────────────
@@ -66,7 +66,7 @@ pub enum SourceClass {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ScalingMode {
     #[default]
-    Fill,    // Crop to fill viewport preserving aspect ratio
+    Fill, // Crop to fill viewport preserving aspect ratio
     Fit,     // Letterbox to fit inside viewport
     Stretch, // Stretch to match viewport dimensions
     Center,  // Center 1:1 without scaling
@@ -237,5 +237,3 @@ pub trait MediaBackend: Send + Sync {
         None
     }
 }
-
-

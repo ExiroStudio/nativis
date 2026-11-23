@@ -104,7 +104,8 @@ fn detect_linux_drm_outputs() -> Vec<OutputInfo> {
                     if let Ok(modes) = fs::read_to_string(&modes_file) {
                         if let Some(first_line) = modes.lines().next() {
                             if let Some((w_str, h_str)) = first_line.split_once('x') {
-                                if let (Ok(w), Ok(h)) = (w_str.parse::<u32>(), h_str.parse::<u32>()) {
+                                if let (Ok(w), Ok(h)) = (w_str.parse::<u32>(), h_str.parse::<u32>())
+                                {
                                     width = w;
                                     height = h;
                                 }
@@ -130,6 +131,3 @@ fn detect_linux_drm_outputs() -> Vec<OutputInfo> {
     }
     outputs
 }
-
-
-
