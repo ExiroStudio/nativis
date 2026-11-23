@@ -137,6 +137,7 @@ pub struct ShmSink {
     submitted_frames: u64,
     total_submit_us: u64,
     window_start: Instant,
+    truncated_warned: bool,
 }
 
 const METRICS_INTERVAL: u64 = 300;
@@ -159,6 +160,7 @@ impl ShmSink {
             submitted_frames: 0,
             total_submit_us: 0,
             window_start: Instant::now(),
+            truncated_warned: false,
         })
     }
 }
@@ -214,12 +216,14 @@ impl FrameSink for ShmSink {
                     let ptr = handle.ptr;
 
                     // 1. Pixel data
-                    for (att, plane) in attachments.iter().zip(planar.planes.iter()) {
+                    for (i, (att, plane)) in attachments.iter().zip(planar.planes.iter()).enumerate() {
                         let dst = ptr.add(att.data_offset as usize);
-                        let len = std::cmp::min(
-                            plane.data.len(),
-                            handle.size.saturating_sub(att.data_offset as usize),
-                        );
+                        let avail = handle.size.saturating_sub(att.data_offset as usize);
+                        if plane.data.len() > avail && !self.truncated_warned {
+                            self.truncated_warned = true;
+                            tracing::warn!("SHM region too small: plane {} needs {} bytes, {} available; frame is truncated (further occurrences not logged)", i, plane.data.len(), avail);
+                        }
+                        let len = std::cmp::min(plane.data.len(), avail);
                         std::ptr::copy_nonoverlapping(plane.data.as_ptr(), dst, len);
                     }
 
@@ -283,6 +287,10 @@ impl FrameSink for ShmSink {
                     
                     let data_ptr = ptr.add(data_offset as usize);
                     let available_size = handle.size.saturating_sub(data_offset as usize);
+                    if cpu.data.len() > available_size && !self.truncated_warned {
+                        self.truncated_warned = true;
+                        tracing::warn!("SHM region too small: frame needs {} bytes, {} available; frame is truncated (further occurrences not logged)", cpu.data.len(), available_size);
+                    }
                     std::ptr::copy_nonoverlapping(
                         cpu.data.as_ptr(),
                         data_ptr,

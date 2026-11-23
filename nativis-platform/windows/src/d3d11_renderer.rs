@@ -132,6 +132,15 @@ unsafe fn compile_shader(source: &[u8], entry_point: &str, target: &str) -> Resu
 }
 
 #[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LastDrawKind {
+    None,
+    Rgba,
+    Nv12,
+    ZeroCopy,
+}
+
+#[cfg(windows)]
 pub struct D3D11Renderer {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
@@ -163,6 +172,8 @@ pub struct D3D11Renderer {
     nv12_gpu_uv_srv: Option<ID3D11ShaderResourceView>,
     last_zero_copy_w: u32,
     last_zero_copy_h: u32,
+
+    last_draw_kind: LastDrawKind,
 
     width: u32,
     height: u32,
@@ -322,6 +333,7 @@ impl D3D11Renderer {
                 nv12_gpu_uv_srv: None,
                 last_zero_copy_w: 0,
                 last_zero_copy_h: 0,
+                last_draw_kind: LastDrawKind::None,
                 width,
                 height,
             })
@@ -374,6 +386,52 @@ impl D3D11Renderer {
 
     pub fn height(&self) -> u32 {
         self.height
+    }
+
+    /// Sets the pipeline state for `kind` and draws the full-screen triangle into the
+    /// current back buffer. Shared by every draw path and by `re_present_last_frame`.
+    unsafe fn draw_pipeline(&mut self, kind: LastDrawKind) -> Result<()> {
+        if self.render_target_view.is_none() {
+            bail!("Render target view not initialized");
+        }
+        let (ps, srvs): (&ID3D11PixelShader, [Option<ID3D11ShaderResourceView>; 2]) = match kind {
+            LastDrawKind::None => bail!("No previous frame has been drawn yet"),
+            LastDrawKind::Rgba => {
+                if self.rgba_srv.is_none() {
+                    bail!("RGBA texture not initialized");
+                }
+                (&self.pixel_shader_rgba, [self.rgba_srv.clone(), None])
+            }
+            LastDrawKind::Nv12 => {
+                if self.y_srv.is_none() || self.uv_srv.is_none() {
+                    bail!("NV12 textures not initialized");
+                }
+                (&self.pixel_shader_nv12, [self.y_srv.clone(), self.uv_srv.clone()])
+            }
+            LastDrawKind::ZeroCopy => {
+                if self.nv12_gpu_y_srv.is_none() || self.nv12_gpu_uv_srv.is_none() {
+                    bail!("Zero-copy NV12 textures not initialized");
+                }
+                (&self.pixel_shader_nv12, [self.nv12_gpu_y_srv.clone(), self.nv12_gpu_uv_srv.clone()])
+            }
+        };
+        let n = if kind == LastDrawKind::Rgba { 1 } else { 2 };
+        self.context.OMSetRenderTargets(Some(std::slice::from_ref(&self.render_target_view)), None);
+        self.context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        self.context.VSSetShader(&self.vertex_shader, None);
+        self.context.PSSetShader(ps, None);
+        self.context.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
+        self.context.PSSetShaderResources(0, Some(&srvs[..n]));
+        self.context.Draw(3, 0);
+        self.last_draw_kind = kind;
+        Ok(())
+    }
+
+    /// Redraws the last frame from the persistent textures (no CPU data needed) and presents.
+    /// Required because the swapchain is FLIP_DISCARD: the back buffer is undefined after Present.
+    pub fn re_present_last_frame(&mut self) -> Result<()> {
+        unsafe { self.draw_pipeline(self.last_draw_kind)?; }
+        self.present()
     }
 
     pub fn draw_nv12(
@@ -473,14 +531,7 @@ impl D3D11Renderer {
             }
             self.context.Unmap(uv_tex, 0);
 
-            // 4. Render to back buffer
-            self.context.OMSetRenderTargets(Some(&[self.render_target_view.clone()]), None);
-            self.context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            self.context.VSSetShader(&self.vertex_shader, None);
-            self.context.PSSetShader(&self.pixel_shader_nv12, None);
-            self.context.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
-            self.context.PSSetShaderResources(0, Some(&[self.y_srv.clone(), self.uv_srv.clone()]));
-            self.context.Draw(3, 0);
+            self.draw_pipeline(LastDrawKind::Nv12)?;
         }
 
         Ok(())
@@ -532,13 +583,7 @@ impl D3D11Renderer {
             }
             self.context.Unmap(tex, 0);
 
-            self.context.OMSetRenderTargets(Some(&[self.render_target_view.clone()]), None);
-            self.context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            self.context.VSSetShader(&self.vertex_shader, None);
-            self.context.PSSetShader(&self.pixel_shader_rgba, None);
-            self.context.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
-            self.context.PSSetShaderResources(0, Some(&[self.rgba_srv.clone()]));
-            self.context.Draw(3, 0);
+            self.draw_pipeline(LastDrawKind::Rgba)?;
         }
 
         Ok(())
@@ -612,14 +657,7 @@ impl D3D11Renderer {
                 None,
             );
 
-            // 3. Render NV12 using BT.709 pixel shader
-            self.context.OMSetRenderTargets(Some(&[self.render_target_view.clone()]), None);
-            self.context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            self.context.VSSetShader(&self.vertex_shader, None);
-            self.context.PSSetShader(&self.pixel_shader_nv12, None);
-            self.context.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
-            self.context.PSSetShaderResources(0, Some(&[self.nv12_gpu_y_srv.clone(), self.nv12_gpu_uv_srv.clone()]));
-            self.context.Draw(3, 0);
+            self.draw_pipeline(LastDrawKind::ZeroCopy)?;
         }
         Ok(())
     }
@@ -641,6 +679,10 @@ pub struct D3D11Renderer;
 #[cfg(not(windows))]
 impl D3D11Renderer {
     pub fn new(_hwnd: isize, _width: u32, _height: u32) -> Result<Self> {
+        bail!("D3D11Renderer is only supported on Windows targets");
+    }
+
+    pub fn re_present_last_frame(&mut self) -> Result<()> {
         bail!("D3D11Renderer is only supported on Windows targets");
     }
 }

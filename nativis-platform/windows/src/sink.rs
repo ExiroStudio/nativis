@@ -203,13 +203,20 @@ impl FrameSink for WindowsDirectSink {
                 }
             });
 
-            if success == Some(true) {
-                if let Err(e) = renderer.present() {
-                    warn!("D3D11 present error: {}", e);
+            match success {
+                Some(true) => {
+                    if let Err(e) = renderer.present() {
+                        warn!("D3D11 present error: {}", e);
+                    }
+                    Ok(())
                 }
-                Ok(())
-            } else {
-                Err(MediaError::GpuUpload("Failed to render frame to D3D11 swapchain".into()))
+                // Resource known but drawing failed: keep reporting the real error.
+                Some(false) => Err(MediaError::GpuUpload("Failed to render frame to D3D11 swapchain".into())),
+                // Resource already freed (e.g. image CpuBuffer released after the first frame):
+                // redraw from the renderer's persistent texture instead of failing silently.
+                None => renderer.re_present_last_frame().map_err(|e| {
+                    MediaError::GpuUpload(format!("Re-present from persistent texture failed: {}", e))
+                }),
             }
         }
         #[cfg(not(windows))]

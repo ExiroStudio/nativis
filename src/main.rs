@@ -241,7 +241,9 @@ fn run_daemon(initial_wallpaper: Option<&str>) -> Result<()> {
 
     let resources = Arc::new(ResourceManager::new());
     let current_wallpaper = Arc::new(RwLock::new(initial_wallpaper.map(|s| s.to_string())));
+    // `is_paused` = explicit user pause (IPC). `platform_paused` = fullscreen/lock/display-off.
     let is_paused = Arc::new(AtomicBool::new(false));
+    let platform_paused = Arc::new(AtomicBool::new(false));
 
     // Channel for dynamic conductor commands
     let (command_tx, command_rx) = unbounded::<RuntimeCommand>();
@@ -253,10 +255,16 @@ fn run_daemon(initial_wallpaper: Option<&str>) -> Result<()> {
     let (platform_tx, platform_rx) = unbounded::<nativis_core::platform::PlatformEvent>();
     platform.set_event_sender(platform_tx);
     let cmd_tx_bridge = command_tx.clone();
+    let bridge_platform_paused = platform_paused.clone();
     std::thread::Builder::new()
         .name("nativis-platform-events".into())
         .spawn(move || {
             while let Ok(event) = platform_rx.recv() {
+                match event {
+                    nativis_core::platform::PlatformEvent::Pause => bridge_platform_paused.store(true, Ordering::SeqCst),
+                    nativis_core::platform::PlatformEvent::Resume => bridge_platform_paused.store(false, Ordering::SeqCst),
+                    nativis_core::platform::PlatformEvent::Redraw => {}
+                }
                 let _ = cmd_tx_bridge.send(RuntimeCommand::PlatformEvent(event));
             }
         })?;
@@ -271,6 +279,7 @@ fn run_daemon(initial_wallpaper: Option<&str>) -> Result<()> {
         resources.clone(),
         current_wallpaper.clone(),
         is_paused.clone(),
+        platform_paused.clone(),
     );
 
     // 3. Initial media backend
@@ -323,6 +332,7 @@ fn start_ipc_server(
     resources: Arc<ResourceManager>,
     current_wallpaper: Arc<RwLock<Option<String>>>,
     is_paused: Arc<AtomicBool>,
+    platform_paused: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let socket_path = get_socket_path();
@@ -345,6 +355,7 @@ fn start_ipc_server(
                 let res = resources.clone();
                 let cur_wp = current_wallpaper.clone();
                 let paused = is_paused.clone();
+                let plat = platform_paused.clone();
 
                 std::thread::spawn(move || {
                     use std::io::{BufRead, BufReader, Write};
@@ -352,7 +363,7 @@ fn start_ipc_server(
                     let mut line = String::new();
                     if reader.read_line(&mut line).is_ok() {
                         if let Ok(cmd) = serde_json::from_str::<IpcCommand>(&line) {
-                            let resp = handle_ipc_command(cmd, &cmd_tx, &res, &cur_wp, &paused);
+                            let resp = handle_ipc_command(cmd, &cmd_tx, &res, &cur_wp, &paused, &plat);
                             if let Ok(resp_json) = serde_json::to_string(&resp) {
                                 let _ = stream.write_all(resp_json.as_bytes());
                                 let _ = stream.write_all(b"\n");
@@ -372,6 +383,7 @@ fn start_ipc_server(
     resources: Arc<ResourceManager>,
     current_wallpaper: Arc<RwLock<Option<String>>>,
     is_paused: Arc<AtomicBool>,
+    platform_paused: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         use std::os::windows::ffi::OsStrExt;
@@ -419,6 +431,7 @@ fn start_ipc_server(
             let res = resources.clone();
             let cur_wp = current_wallpaper.clone();
             let paused = is_paused.clone();
+            let plat = platform_paused.clone();
 
             std::thread::spawn(move || {
                 let stream_reader = match stream.try_clone() {
@@ -429,7 +442,7 @@ fn start_ipc_server(
                 let mut line = String::new();
                 if reader.read_line(&mut line).is_ok() {
                     if let Ok(cmd) = serde_json::from_str::<IpcCommand>(&line) {
-                        let resp = handle_ipc_command(cmd, &cmd_tx, &res, &cur_wp, &paused);
+                        let resp = handle_ipc_command(cmd, &cmd_tx, &res, &cur_wp, &paused, &plat);
                         if let Ok(resp_json) = serde_json::to_string(&resp) {
                             let _ = stream.write_all(resp_json.as_bytes());
                             let _ = stream.write_all(b"\n");
@@ -448,6 +461,7 @@ fn start_ipc_server(
     _resources: Arc<ResourceManager>,
     _current_wallpaper: Arc<RwLock<Option<String>>>,
     _is_paused: Arc<AtomicBool>,
+    _platform_paused: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(|| {})
 }
@@ -458,6 +472,7 @@ fn handle_ipc_command(
     _resources: &ResourceManager,
     current_wallpaper: &RwLock<Option<String>>,
     is_paused: &AtomicBool,
+    platform_paused: &AtomicBool,
 ) -> IpcResponse {
     match cmd {
         IpcCommand::SetWallpaper { uri, monitor, scaling } => {
@@ -564,7 +579,7 @@ fn handle_ipc_command(
             let cfg = UserConfig::load();
             IpcResponse::Status(EngineStatus {
                 is_running: true,
-                is_paused: is_paused.load(Ordering::SeqCst),
+                is_paused: is_paused.load(Ordering::SeqCst) || platform_paused.load(Ordering::SeqCst),
                 active_wallpaper: wp,
                 target_fps: cfg.target_fps,
                 playback_speed: cfg.playback_speed,

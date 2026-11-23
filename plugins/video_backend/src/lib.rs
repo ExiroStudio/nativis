@@ -716,6 +716,8 @@ fn decoder_thread(
         }
         let mut pool: [Option<PlanarSlot>; 3] = [None, None, None];
         let mut pool_idx = 0usize;
+        let mut pool_hits = 0u64;
+        let mut pool_misses = 0u64;
 
         'packets: for (stream_ref, packet) in ictx.packets() {
             if stop.load(Ordering::Acquire) { break 'outer; }
@@ -859,9 +861,11 @@ fn decoder_thread(
                     };
 
                     if reusable {
+                        pool_hits += 1;
                         let s = slot.as_ref().unwrap();
                         (Arc::clone(&s.y), Arc::clone(&s.uv))
                     } else {
+                        pool_misses += 1;
                         let y: Arc<[u8]> = Arc::from(y_src);
                         let uv: Arc<[u8]> = Arc::from(uv_src);
                         let y_clone = Arc::clone(&y);
@@ -910,15 +914,18 @@ fn decoder_thread(
                     let avg_scl   = total_scale_us  / decode_count.max(1);
                     let avg_copy  = total_copy_us / decode_count.max(1);
                     info!(
-                        "[NATIVIS DECODE] decode_fps={:.1} avg_decode_us={}µs avg_transfer_us={}µs avg_scale_us={}µs avg_copy_us={}µs (scale_pct={:.0}%)",
+                        "[NATIVIS DECODE] decode_fps={:.1} avg_decode_us={}µs avg_transfer_us={}µs avg_scale_us={}µs avg_copy_us={}µs (scale_pct={:.0}%) pool_hits={} pool_misses={}",
                         fps, avg_dec, avg_xfer, avg_scl, avg_copy,
-                        (avg_scl as f64 / (avg_dec + avg_xfer + avg_scl + avg_copy).max(1) as f64) * 100.0
+                        (avg_scl as f64 / (avg_dec + avg_xfer + avg_scl + avg_copy).max(1) as f64) * 100.0,
+                        pool_hits, pool_misses,
                     );
                     decode_count    = 0;
                     total_decode_us = 0;
                     total_transfer_us = 0;
                     total_scale_us  = 0;
                     total_copy_us   = 0;
+                    pool_hits       = 0;
+                    pool_misses     = 0;
                     thread_window   = Instant::now();
                 }
 

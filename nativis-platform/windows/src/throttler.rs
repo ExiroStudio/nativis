@@ -272,7 +272,14 @@ impl Throttler {
     }
 
     pub fn set_event_sender(&self, sender: Sender<PlatformEvent>) {
-        *self.state.event_sender.write() = Some(sender);
+        // Store first, then inspect: a concurrent evaluate() either sees the sender
+        // (and sends itself) or already flipped `paused` (and we send here). At worst a
+        // duplicate Pause is sent, which the conductor treats idempotently; a lost one
+        // would leave the engine decoding under a fullscreen game.
+        *self.state.event_sender.write() = Some(sender.clone());
+        if self.state.paused.load(Ordering::SeqCst) {
+            let _ = sender.send(PlatformEvent::Pause);
+        }
     }
 
     pub fn evaluate(&self) {

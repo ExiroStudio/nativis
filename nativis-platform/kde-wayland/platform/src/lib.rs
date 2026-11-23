@@ -212,7 +212,14 @@ fn run_screensaver_monitor(sender: nativis_core::platform::PlatformEventSender) 
         .stderr(Stdio::null())
         .spawn();
 
-    if let Ok(mut child) = child {
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Failed to spawn dbus-monitor ({}); lock/screen-off pausing is disabled", e);
+            return;
+        }
+    };
+    {
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
             for line in reader.lines().flatten() {
@@ -226,6 +233,7 @@ fn run_screensaver_monitor(sender: nativis_core::platform::PlatformEventSender) 
                 }
             }
         }
+        tracing::warn!("dbus-monitor exited; lock/screen-off pausing has stopped");
         let _ = child.kill();
     }
 }

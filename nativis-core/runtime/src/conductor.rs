@@ -99,6 +99,10 @@ impl Runtime {
 
         let mut target_frame_time = Duration::from_secs_f64(1.0 / self.config.target_fps.max(1) as f64);
         let mut last_tick = Instant::now();
+        // User pause (IPC) and platform pause (fullscreen/lock/display-off) are tracked
+        // separately so a platform Resume can never override an explicit user pause.
+        let mut user_paused = false;
+        let mut platform_paused = false;
         let mut is_paused = false;
         let mut pending_cmd: Option<RuntimeCommand> = None;
         // Last successfully submitted frame — used for Redraw (throttle resume, display change,
@@ -114,6 +118,8 @@ impl Runtime {
                     RuntimeCommand::SetBackend(new_backend) => {
                         info!("Hot-swapping media backend to: {}", new_backend.name());
                         backend.close();
+                        // The old backend's handles are gone; never redraw them.
+                        last_frame = None;
                         backend = new_backend;
                     }
                     RuntimeCommand::OpenAndSwap { backend: mut new_backend, source, reply } => {
@@ -125,6 +131,8 @@ impl Runtime {
                             source.raw_uri(),
                         );
                         backend.close();
+                        // The old backend's handles are gone; never redraw them.
+                        last_frame = None;
                         match new_backend.open(&source, &clock, &resources) {
                             Ok(()) => {
                                 backend = new_backend;
@@ -154,12 +162,14 @@ impl Runtime {
                         }
                     }
                     RuntimeCommand::SetPause(paused) => {
-                        is_paused = paused;
-                        info!("Playback paused state changed to: {}", is_paused);
+                        user_paused = paused;
+                        is_paused = user_paused || platform_paused;
+                        info!("Playback paused: {} (user={}, platform={})", is_paused, user_paused, platform_paused);
                     }
                     RuntimeCommand::TogglePause => {
-                        is_paused = !is_paused;
-                        info!("Playback pause toggled to: {}", is_paused);
+                        user_paused = !user_paused;
+                        is_paused = user_paused || platform_paused;
+                        info!("Playback paused: {} (user={}, platform={})", is_paused, user_paused, platform_paused);
                     }
                     RuntimeCommand::SetFps(fps) => {
                         target_frame_time = Duration::from_secs_f64(1.0 / fps.max(1) as f64);
@@ -182,12 +192,14 @@ impl Runtime {
                     }
                     RuntimeCommand::PlatformEvent(ev) => match ev {
                         nativis_core::platform::PlatformEvent::Pause => {
+                            platform_paused = true;
                             is_paused = true;
                             info!("Platform event: Playback PAUSED (e.g. fullscreen/display off)");
                         }
                         nativis_core::platform::PlatformEvent::Resume => {
-                            is_paused = false;
-                            info!("Platform event: Playback RESUMED");
+                            platform_paused = false;
+                            is_paused = user_paused || platform_paused;
+                            info!("Platform event: platform pause cleared (playback paused={})", is_paused);
                             if let Some(ref frame) = last_frame {
                                 if let Err(e) = sink.submit(frame.clone()) {
                                     warn!("PlatformEvent::Resume redraw error: {}", e);
@@ -319,5 +331,158 @@ impl Runtime {
         backend.close();
         
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossbeam_channel::unbounded;
+    use nativis_core::contract::{Frame, MediaCapability, MediaError, ResourceHandle};
+    use nativis_core::platform::PlatformEvent;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    struct MockBackend {
+        updates: Arc<AtomicUsize>,
+        status: FrameStatus,
+    }
+
+    impl MediaBackend for MockBackend {
+        fn name(&self) -> &'static str { "mock" }
+        fn open(&mut self, _s: &AssetPath, _c: &MediaClock, _r: &ResourceManager) -> Result<(), MediaError> { Ok(()) }
+        fn close(&mut self) {}
+        fn update(&mut self, _dt: Duration) -> Result<(), MediaError> {
+            self.updates.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn current_frame(&self) -> FrameStatus { self.status.clone() }
+        fn capabilities(&self) -> &[MediaCapability] { &[] }
+        fn supports(&self, _s: &AssetPath) -> bool { true }
+    }
+
+    struct MockSink { submits: Arc<Mutex<Vec<u64>>> }
+
+    impl FrameSink for MockSink {
+        fn submit(&mut self, frame: Frame) -> Result<(), MediaError> {
+            self.submits.lock().unwrap().push(frame.resource.0);
+            Ok(())
+        }
+    }
+
+    fn spawn_runtime(
+        backend: MockBackend,
+        sink: MockSink,
+        fps: u32,
+    ) -> (crossbeam_channel::Sender<RuntimeCommand>, std::thread::JoinHandle<()>) {
+        let (tx, rx) = unbounded();
+        let h = std::thread::spawn(move || {
+            Runtime::new(RuntimeConfig { target_fps: fps })
+                .run_with_commands(Box::new(backend), Box::new(sink), rx, ResourceManager::new(), MediaClock::new(), None)
+                .unwrap();
+        });
+        (tx, h)
+    }
+
+    #[test]
+    fn user_pause_survives_platform_resume() {
+        let updates = Arc::new(AtomicUsize::new(0));
+        let (tx, h) = spawn_runtime(
+            MockBackend { updates: updates.clone(), status: FrameStatus::Unchanged },
+            MockSink { submits: Arc::new(Mutex::new(vec![])) },
+            120,
+        );
+        std::thread::sleep(Duration::from_millis(30));
+        tx.send(RuntimeCommand::SetPause(true)).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        let paused_at = updates.load(Ordering::SeqCst);
+
+        tx.send(RuntimeCommand::PlatformEvent(PlatformEvent::Pause)).unwrap();
+        tx.send(RuntimeCommand::PlatformEvent(PlatformEvent::Resume)).unwrap();
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(updates.load(Ordering::SeqCst), paused_at, "platform Resume overrode the user pause");
+
+        tx.send(RuntimeCommand::SetPause(false)).unwrap();
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(updates.load(Ordering::SeqCst) > paused_at, "did not resume after the user unpaused");
+
+        tx.send(RuntimeCommand::Stop).unwrap();
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn platform_pause_blocks_and_resume_restarts() {
+        let updates = Arc::new(AtomicUsize::new(0));
+        let (tx, h) = spawn_runtime(
+            MockBackend { updates: updates.clone(), status: FrameStatus::Unchanged },
+            MockSink { submits: Arc::new(Mutex::new(vec![])) },
+            120,
+        );
+        tx.send(RuntimeCommand::PlatformEvent(PlatformEvent::Pause)).unwrap();
+        std::thread::sleep(Duration::from_millis(60));
+        let a = updates.load(Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(updates.load(Ordering::SeqCst), a, "conductor kept updating while platform-paused");
+
+        tx.send(RuntimeCommand::PlatformEvent(PlatformEvent::Resume)).unwrap();
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(updates.load(Ordering::SeqCst) > a);
+        tx.send(RuntimeCommand::Stop).unwrap();
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn open_and_swap_clears_redraw_frame() {
+        let submits = Arc::new(Mutex::new(Vec::new()));
+        let frame = Frame::new(ResourceHandle(42), 16, 16, Duration::ZERO, true);
+        let (tx, h) = spawn_runtime(
+            MockBackend { updates: Arc::new(AtomicUsize::new(0)), status: FrameStatus::Ready(frame) },
+            MockSink { submits: submits.clone() },
+            60,
+        );
+        std::thread::sleep(Duration::from_millis(40));
+        assert!(!submits.lock().unwrap().is_empty(), "first frame was never submitted");
+
+        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        tx.send(RuntimeCommand::OpenAndSwap {
+            backend: Box::new(MockBackend { updates: Arc::new(AtomicUsize::new(0)), status: FrameStatus::Unchanged }),
+            source: AssetPath::parse("memory://x.png").unwrap(),
+            reply: Some(reply_tx),
+        }).unwrap();
+        reply_rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+        submits.lock().unwrap().clear();
+
+        tx.send(RuntimeCommand::Redraw).unwrap();
+        tx.send(RuntimeCommand::PlatformEvent(PlatformEvent::Resume)).unwrap();
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(submits.lock().unwrap().is_empty(), "stale frame from the closed backend was re-submitted");
+
+        tx.send(RuntimeCommand::Stop).unwrap();
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn exits_when_command_channel_disconnects_while_idle() {
+        let (tx, h) = spawn_runtime(
+            MockBackend { updates: Arc::new(AtomicUsize::new(0)), status: FrameStatus::Idle },
+            MockSink { submits: Arc::new(Mutex::new(vec![])) },
+            60,
+        );
+        std::thread::sleep(Duration::from_millis(30));
+        drop(tx);
+        h.join().unwrap(); // would hang (or spin) if disconnect were not handled
+    }
+
+    #[test]
+    fn exits_when_command_channel_disconnects_while_paused() {
+        let (tx, h) = spawn_runtime(
+            MockBackend { updates: Arc::new(AtomicUsize::new(0)), status: FrameStatus::Unchanged },
+            MockSink { submits: Arc::new(Mutex::new(vec![])) },
+            60,
+        );
+        tx.send(RuntimeCommand::SetPause(true)).unwrap();
+        std::thread::sleep(Duration::from_millis(30));
+        drop(tx);
+        h.join().unwrap();
     }
 }
