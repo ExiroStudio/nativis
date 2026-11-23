@@ -3090,6 +3090,7 @@ dependencies = [
  "anyhow",
  "crossbeam-channel",
  "nativis-core",
+ "nativis-protocol",
  "parking_lot",
  "tracing",
  "windows 0.58.0",
