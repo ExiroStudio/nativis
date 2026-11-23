@@ -1,6 +1,7 @@
 #![no_std]
 
 pub const NATIVIS_MAGIC: u32 = 0x4954414E; // 'NATI' in little-endian ASCII (N=0x4E, A=0x41, T=0x54, I=0x49) Wait, N is 0x4E, A is 0x41, T is 0x54, I is 0x49. So 0x4954414E.
+pub const NATIVIS_VERSION: u32 = 3;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9,6 +10,7 @@ pub struct NativisFrameHeader {
     pub version: u32,
     pub frame_id: u64,
     pub timestamp: u64,
+    pub sequence: u64, // Seqlock counter: odd = write in progress, even = write complete
     pub attachment_count: u32,
     pub attachment_offset: u32, // Offset in bytes from the start of the header to the array of NativisAttachment
 }
@@ -62,12 +64,12 @@ pub struct NativisSurface {
     pub format: u32,      // NATIVIS_FORMAT_*
     pub width: u32,
     pub height: u32,
-    pub modifier: u64,    // Layout / tiling for GPU kinds, 0 for CPU
+    pub modifier: u64, // Layout / tiling for GPU kinds, 0 for CPU
     pub planes: [NativisPlaneDesc; 4],
     pub plane_count: u32,
-    pub fence: i64,       // fd / NT handle / keyed mutex; 0 = none
-    pub flags: u32,       // NATIVIS_SURFACE_FLAG_*
-    pub slot: u32,        // Buffer pool slot index
+    pub fence: i64, // fd / NT handle / keyed mutex; 0 = none
+    pub flags: u32, // NATIVIS_SURFACE_FLAG_*
+    pub slot: u32,  // Buffer pool slot index
 }
 
 impl Default for NativisSurface {
@@ -79,7 +81,11 @@ impl Default for NativisSurface {
             width: 0,
             height: 0,
             modifier: 0,
-            planes: [NativisPlaneDesc { handle: 0, offset: 0, stride: 0 }; 4],
+            planes: [NativisPlaneDesc {
+                handle: 0,
+                offset: 0,
+                stride: 0,
+            }; 4],
             plane_count: 0,
             fence: 0,
             flags: 0,
@@ -87,4 +93,3 @@ impl Default for NativisSurface {
         }
     }
 }
-
