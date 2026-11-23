@@ -215,6 +215,8 @@ impl WorkerWContext {
                 throttler: Arc::clone(&throttler),
                 width,
                 height,
+                resources: parking_lot::Mutex::new(None),
+                generation: std::sync::atomic::AtomicU64::new(1),
             });
             *RECOVERY_CTX.write() = Some(recovery_ctx);
             let recovery_thread = spawn_recovery_listener();
@@ -232,6 +234,13 @@ impl WorkerWContext {
                 thread_handle: Some(thread_handle),
                 recovery_thread_handle: Some(recovery_thread),
             })
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn set_resources(&self, resources: nativis_core::resource::ResourceManager) {
+        if let Some(ctx) = RECOVERY_CTX.read().as_ref() {
+            *ctx.resources.lock() = Some(resources);
         }
     }
 
@@ -367,6 +376,8 @@ struct RecoveryContext {
     throttler: Arc<Throttler>,
     width: u32,
     height: u32,
+    resources: parking_lot::Mutex<Option<nativis_core::resource::ResourceManager>>,
+    generation: std::sync::atomic::AtomicU64,
 }
 
 #[cfg(windows)]
@@ -430,8 +441,18 @@ unsafe extern "system" fn recovery_wndproc(
                                 let hwnd_win = windows::Win32::Foundation::HWND(new_hwnd as *mut _);
                                 match crate::d3d11_renderer::D3D11Renderer::new(hwnd_win, ctx.width, ctx.height) {
                                     Ok(new_r) => {
+                                        let gen = ctx.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                                        if let Some(res) = ctx.resources.lock().as_ref() {
+                                            let dev_ptr = windows::core::Interface::as_raw(&new_r.device()) as usize;
+                                            let ctx_ptr = windows::core::Interface::as_raw(&new_r.context()) as usize;
+                                            res.set_gpu_device(nativis_core::resource::GpuDeviceResource {
+                                                device_ptr: dev_ptr,
+                                                device_context_ptr: ctx_ptr,
+                                                generation: gen,
+                                            });
+                                        }
                                         *ctx.renderer.lock() = Some(new_r);
-                                        info!("Explorer recovery: swapchain recreated successfully. Triggering Redraw.");
+                                        info!("Explorer recovery: swapchain recreated successfully (generation={}). Triggering Redraw.", gen);
                                         crate::throttler::on_display_changed();
                                         return;
                                     }

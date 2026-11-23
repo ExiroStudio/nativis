@@ -7,7 +7,7 @@ use crate::throttler::Throttler;
 #[cfg(windows)]
 use anyhow::Context;
 #[cfg(windows)]
-use nativis_core::resource::{CpuBuffer, PlanarBuffer, Resource};
+use nativis_core::resource::{CpuBuffer, PlanarBuffer};
 #[cfg(windows)]
 use parking_lot::Mutex;
 #[cfg(windows)]
@@ -16,24 +16,9 @@ use tracing::warn;
 #[cfg(windows)]
 use crate::d3d11_renderer::D3D11Renderer;
 
-/// Internal GPU-backed Direct3D 11 texture resource for Windows platform.
-/// Kept isolated to Windows crate (D1.3, D4) rather than leaking into nativis-core.
-#[cfg(windows)]
-pub struct D3D11TextureResource {
-    pub texture_ptr: usize,
-    pub subresource_index: u32,
-    pub width: u32,
-    pub height: u32,
-    pub format: u32,
-    pub keeper: Option<Arc<dyn std::any::Any + Send + Sync>>,
-}
-
-#[cfg(windows)]
-impl Resource for D3D11TextureResource {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
+/// GPU-backed Direct3D 11 texture resource for Windows platform.
+/// Aliased to neutral GpuTextureResource in core (D1.3, D4).
+pub type D3D11TextureResource = nativis_core::resource::GpuTextureResource;
 
 
 pub struct WindowsDirectSink {

@@ -57,6 +57,17 @@ impl Platform for WindowsPlatform {
     fn create_sink(&self, resources: &ResourceManager) -> Result<Box<dyn FrameSink>> {
         #[cfg(windows)]
         if let Some(ref w) = self.workerw {
+            if let Some(ref r) = *w.renderer.lock() {
+                let dev_ptr = windows::core::Interface::as_raw(&r.device()) as usize;
+                let ctx_ptr = windows::core::Interface::as_raw(&r.context()) as usize;
+                resources.set_gpu_device(nativis_core::resource::GpuDeviceResource {
+                    device_ptr: dev_ptr,
+                    device_context_ptr: ctx_ptr,
+                    generation: 1,
+                });
+            }
+            w.set_resources(resources.clone());
+
             let sink = WindowsDirectSink::with_shared(
                 Arc::clone(&w.wallpaper_hwnd),
                 Arc::clone(&w.renderer),

@@ -21,5 +21,5 @@ pub mod platform;
 pub use clock::MediaClock;
 pub use contract::{FrameStatus, MediaBackend, MediaCapability, Frame, FrameSink, ResourceHandle};
 pub use event::EngineEvent;
-pub use resource::{ResourceManager, Resource, CpuBuffer};
+pub use resource::{ResourceManager, Resource, CpuBuffer, GpuDeviceResource, GpuTextureResource};
 pub use platform::Platform;

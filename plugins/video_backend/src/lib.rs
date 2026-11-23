@@ -56,7 +56,7 @@ use nativis_asset::AssetPath;
 use nativis_core::{
     clock::MediaClock,
     contract::{Frame, FrameStatus, MediaBackend, MediaCapability, MediaError, ResourceHandle},
-    resource::{PlanarBuffer, PlaneDesc, PixelFormat, ResourceManager},
+    resource::{PlanarBuffer, PlaneDesc, PixelFormat, ResourceManager, GpuTextureResource},
 };
 
 pub use frame::DecodedFrame;
@@ -94,12 +94,44 @@ struct HardwareDecodeState {
     device: *mut ffi::AVBufferRef,
     pixel_format: ffi::AVPixelFormat,
     device_name: &'static str,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    is_shared_device: bool,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    generation: u64,
 }
 
 impl Drop for HardwareDecodeState {
     fn drop(&mut self) {
         unsafe { ffi::av_buffer_unref(&mut self.device) };
     }
+}
+
+/// FFmpeg AVD3D11VADeviceContext layout from <libavutil/hwcontext_d3d11va.h>
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct AVD3D11VADeviceContext {
+    device: *mut std::ffi::c_void,
+    device_context: *mut std::ffi::c_void,
+    video_device: *mut std::ffi::c_void,
+    video_context: *mut std::ffi::c_void,
+    lock: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
+    unlock: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
+    lock_ctx: *mut std::ffi::c_void,
+    bind_flags: u32,
+    misc_flags: u32,
+}
+
+/// Calls COM IUnknown::AddRef (vtable slot 1) on raw COM pointer.
+/// FFmpeg av_hwdevice_ctx_free will call Release on device deallocation.
+#[cfg(target_os = "windows")]
+unsafe fn com_add_ref(ptr: *mut std::ffi::c_void) -> u32 {
+    if ptr.is_null() {
+        return 0;
+    }
+    let vtable = *(ptr as *mut *const usize);
+    let add_ref_fn: unsafe extern "system" fn(*mut std::ffi::c_void) -> u32 =
+        std::mem::transmute(*vtable.add(1));
+    add_ref_fn(ptr)
 }
 
 fn software_thread_count() -> usize {
@@ -209,6 +241,7 @@ unsafe extern "C" fn select_hardware_format(
 fn configure_hardware_decoder(
     context: &mut ffmpeg::codec::context::Context,
     preference: DecodePreference,
+    _gpu_device: Option<nativis_core::resource::GpuDeviceResource>,
 ) -> Result<Option<Box<HardwareDecodeState>>, String> {
     if preference == DecodePreference::Software {
         return Ok(None);
@@ -218,6 +251,80 @@ fn configure_hardware_decoder(
         let codec = ffi::avcodec_find_decoder((*context.as_ptr()).codec_id);
         if codec.is_null() {
             return Err("FFmpeg could not find a decoder for the stream".into());
+        }
+
+        // On Windows: Attempt shared D3D11VA device initialization first if platform published its device.
+        #[cfg(target_os = "windows")]
+        if let Some(gpu) = _gpu_device {
+            let zero_copy_enabled = std::env::var("NATIVIS_D3D11_ZERO_COPY")
+                .map(|v| v != "0" && v.to_lowercase() != "false")
+                .unwrap_or(true);
+
+            if zero_copy_enabled && gpu.device_ptr != 0 {
+                let mut config_index = 0;
+                let mut d3d11_config = None;
+                loop {
+                    let config = ffi::avcodec_get_hw_config(codec, config_index);
+                    if config.is_null() {
+                        break;
+                    }
+                    config_index += 1;
+                    if (*config).device_type == ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA && ((*config).methods & 1) != 0 {
+                        d3d11_config = Some(config);
+                        break;
+                    }
+                }
+
+                if let Some(config) = d3d11_config {
+                    let mut device_ref = ffi::av_hwdevice_ctx_alloc(ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA);
+                    if !device_ref.is_null() {
+                        let hwctx = (*device_ref).data as *mut ffi::AVHWDeviceContext;
+                        if !hwctx.is_null() {
+                            let d3d11_ctx = (*hwctx).hwctx as *mut AVD3D11VADeviceContext;
+                            if !d3d11_ctx.is_null() {
+                                // AddRef device COM interface as FFmpeg calls Release on av_hwdevice_ctx_free
+                                com_add_ref(gpu.device_ptr as *mut std::ffi::c_void);
+                                (*d3d11_ctx).device = gpu.device_ptr as *mut std::ffi::c_void;
+                                if gpu.device_context_ptr != 0 {
+                                    com_add_ref(gpu.device_context_ptr as *mut std::ffi::c_void);
+                                    (*d3d11_ctx).device_context = gpu.device_context_ptr as *mut std::ffi::c_void;
+                                }
+                                const D3D11_BIND_DECODER: u32 = 0x200;
+                                const D3D11_BIND_SHADER_RESOURCE: u32 = 0x08;
+                                (*d3d11_ctx).bind_flags = D3D11_BIND_DECODER | D3D11_BIND_SHADER_RESOURCE;
+
+                                let init_err = ffi::av_hwdevice_ctx_init(device_ref);
+                                if init_err == 0 {
+                                    let decoder_device = ffi::av_buffer_ref(device_ref);
+                                    if !decoder_device.is_null() {
+                                        // 4 extra surfaces in pool so holding frames in channel does not starve decoder
+                                        (*context.as_mut_ptr()).extra_hw_frames = 4;
+
+                                        let state = Box::new(HardwareDecodeState {
+                                            device: device_ref,
+                                            pixel_format: (*config).pix_fmt,
+                                            device_name: "d3d11va",
+                                            is_shared_device: true,
+                                            generation: gpu.generation,
+                                        });
+                                        let raw_context = context.as_mut_ptr();
+                                        (*raw_context).hw_device_ctx = decoder_device;
+                                        (*raw_context).opaque = (&*state as *const HardwareDecodeState).cast_mut().cast();
+                                        (*raw_context).get_format = Some(select_hardware_format);
+                                        info!("[NATIVIS DECODE] Initialized shared D3D11VA device context (zero-copy enabled)");
+                                        return Ok(Some(state));
+                                    }
+                                } else {
+                                    warn!("[NATIVIS DECODE] Shared D3D11VA device context init failed (code={}); falling back to independent device and CPU readback", init_err);
+                                }
+                            }
+                        }
+                        ffi::av_buffer_unref(&mut device_ref);
+                    }
+                }
+            } else if !zero_copy_enabled {
+                info!("[NATIVIS DECODE] NATIVIS_D3D11_ZERO_COPY is disabled; using independent device + CPU readback");
+            }
         }
 
         for (device_type, device_name) in preferred_hardware_devices() {
@@ -255,6 +362,8 @@ fn configure_hardware_decoder(
                     device,
                     pixel_format: (*config).pix_fmt,
                     device_name,
+                    is_shared_device: false,
+                    generation: 0,
                 });
                 let raw_context = context.as_mut_ptr();
                 (*raw_context).hw_device_ctx = decoder_device;
@@ -294,6 +403,8 @@ pub struct VideoBackend {
     publish_count:    u64,
     skip_count:       u64,
     total_publish_us: u64,
+    zero_copy_frames: u64,
+    readback_frames:  u64,
     window_start:     Instant,
 }
 
@@ -311,6 +422,8 @@ impl VideoBackend {
             publish_count:    0,
             skip_count:       0,
             total_publish_us: 0,
+            zero_copy_frames: 0,
+            readback_frames:  0,
             window_start:     Instant::now(),
         }
     }
@@ -395,9 +508,10 @@ impl MediaBackend for VideoBackend {
         self.stop_signal = Some(Arc::clone(&stop));
         self.window_start = Instant::now();
 
+        let res_clone = resources.clone();
         std::thread::Builder::new()
             .name(format!("nativis-decode:{}", path_str))
-            .spawn(move || decoder_thread(&path_str, tx, stop))
+            .spawn(move || decoder_thread(&path_str, tx, stop, res_clone))
             .map_err(|e| MediaError::Open(format!("Failed to spawn decoder thread: {}", e)))?;
 
         info!("VideoBackend: opened '{}'", source.raw_uri());
@@ -470,19 +584,32 @@ impl MediaBackend for VideoBackend {
             let width   = df.width;
             let height  = df.height;
 
-            // Register NV12 planar data — Arc::clone is refcount-only, NO memcpy.
-            let buf = PlanarBuffer {
-                format: PixelFormat::Nv12,
-                width,
-                height,
-                planes: vec![
-                    PlaneDesc { data: df.y_plane.clone(),  stride: df.y_stride },
-                    PlaneDesc { data: df.uv_plane.clone(), stride: df.uv_stride },
-                ],
+            let handle = if let Some(gpu_frame) = &df.d3d11_texture {
+                let buf = GpuTextureResource {
+                    texture_ptr: gpu_frame.texture_ptr,
+                    subresource_index: gpu_frame.subresource_index,
+                    width,
+                    height,
+                    format: 103, // DXGI_FORMAT_NV12
+                    keeper: gpu_frame.frame_ref.clone(),
+                };
+                self.zero_copy_frames += 1;
+                resources.register(Box::new(buf))
+            } else {
+                // Register NV12 planar data — Arc::clone is refcount-only, NO memcpy.
+                let buf = PlanarBuffer {
+                    format: PixelFormat::Nv12,
+                    width,
+                    height,
+                    planes: vec![
+                        PlaneDesc { data: df.y_plane.clone(),  stride: df.y_stride },
+                        PlaneDesc { data: df.uv_plane.clone(), stride: df.uv_stride },
+                    ],
+                };
+                self.readback_frames += 1;
+                resources.register(Box::new(buf))
             };
-            let handle = resources.register(Box::new(buf));
             self.last_handle = Some(handle);
-
 
             self.pending = Some(Frame::new(
                 handle,
@@ -491,7 +618,6 @@ impl MediaBackend for VideoBackend {
                 pts,
                 true,
             ));
-
 
             let us = t0.elapsed().as_micros() as u64;
             self.total_publish_us += us;
@@ -502,8 +628,8 @@ impl MediaBackend for VideoBackend {
                 let fps       = self.publish_count as f64 / elapsed_s.max(0.001);
                 let avg_us    = self.total_publish_us / self.publish_count.max(1);
                 info!(
-                    "[NATIVIS VIDEO] publish_fps={:.1} avg_publish_us={}µs total_skipped={}",
-                    fps, avg_us, self.skip_count
+                    "[NATIVIS VIDEO] publish_fps={:.1} avg_publish_us={}µs zero_copy={} readback={} total_skipped={}",
+                    fps, avg_us, self.zero_copy_frames, self.readback_frames, self.skip_count
                 );
                 // Reset window
                 self.publish_count    = 0;
@@ -565,6 +691,7 @@ fn decoder_thread(
     path: &str,
     tx:   crossbeam_channel::Sender<DecodedFrame>,
     stop: Arc<AtomicBool>,
+    resources: ResourceManager,
 ) {
     if let Err(e) = ffmpeg::init() {
         error!("[NATIVIS DECODE] ffmpeg::init() failed: {}", e);
@@ -576,6 +703,8 @@ fn decoder_thread(
     let mut total_transfer_us: u64 = 0;
     let mut total_scale_us:  u64 = 0;
     let mut total_copy_us:   u64 = 0;
+    let mut window_zero_copy_frames: u64 = 0;
+    let mut window_readback_frames: u64 = 0;
     let mut thread_window         = Instant::now();
     let preference = DecodePreference::from_environment();
     let mut allow_hardware = preference != DecodePreference::Software;
@@ -616,7 +745,7 @@ fn decoder_thread(
         } else {
             DecodePreference::Software
         };
-        let mut hardware = match configure_hardware_decoder(&mut context, hardware_preference) {
+        let mut hardware = match configure_hardware_decoder(&mut context, hardware_preference, resources.gpu_device()) {
             Ok(hardware) => hardware,
             Err(error) if preference == DecodePreference::Hardware => {
                 error!("[NATIVIS DECODE] hardware decode required but unavailable: {}", error);
@@ -668,11 +797,15 @@ fn decoder_thread(
         // (zero-copy path disabled in Phase 0 due to cross-device bug, see K1 comment).
         #[cfg(target_os = "windows")]
         {
-            if hardware.is_some() {
+            if let Some(state) = hardware.as_ref() {
+                let mode_str = if state.is_shared_device {
+                    "d3d11va+zero_copy"
+                } else {
+                    "d3d11va+cpu_readback"
+                };
                 info!(
-                    "[NATIVIS DECODE] Opened: {}x{} {:?} → NV12 tb={}/{} mode={}+cpu_readback threads={} \
-                     (zero-copy disabled in Phase 0, see ARCHITECTURE_REVIEW §1.1 K1)",
-                    w, h, decoder_format, tb.numerator(), tb.denominator(), decoder_mode,
+                    "[NATIVIS DECODE] Opened: {}x{} {:?} → NV12 tb={}/{} mode={} threads={}",
+                    w, h, decoder_format, tb.numerator(), tb.denominator(), mode_str,
                     software_thread_count(),
                 );
             } else {
@@ -718,6 +851,7 @@ fn decoder_thread(
         let mut pool_idx = 0usize;
         let mut pool_hits = 0u64;
         let mut pool_misses = 0u64;
+        let mut logged_non_nv12 = false;
 
         'packets: for (stream_ref, packet) in ictx.packets() {
             if stop.load(Ordering::Acquire) { break 'outer; }
@@ -730,26 +864,93 @@ fn decoder_thread(
                 let t_decode_done = Instant::now();
                 let raw_pts = raw.pts().unwrap_or(0);
 
-                // K1 FIX (Phase 0, Option A): The D3D11 zero-copy path is DISABLED on Windows.
-                //
-                // Root cause H1 (high confidence, ARCHITECTURE_REVIEW_2026-11.md §1.1):
-                // The FFmpeg decoder allocates its own ID3D11Device independently via
-                // av_hwdevice_ctx_create(D3D11VA, NULL, ...) in configure_hardware_decoder().
-                // The D3D11Renderer creates a *separate* device in D3D11Renderer::new().
-                // CopySubresourceRegion with a source texture from a different device is an
-                // invalid D3D11 operation — it silently produces black or green frames with
-                // no error code (the API returns void), violating D7.3.
-                //
-                // Fix: Fall through to av_hwframe_transfer_data (CPU readback) below.
-                // D3D11VA decode still runs on the GPU; only the final readback is CPU.
-                // This is consistent with D6 (CPU readback as the cross-platform baseline).
-                //
-                // The zero-copy path will be re-enabled in Phase 1 when surface negotiation
-                // allows the platform to share its D3D11 device with the decoder (Option B).
+                // Zero-Copy Direct3D 11 VRAM Texture Path (Phase 1)
                 #[cfg(target_os = "windows")]
-                if hardware.is_some() && raw.format() == Pixel::from(ffi::AVPixelFormat::AV_PIX_FMT_D3D11) {
-                    // Intentionally fall through to av_hwframe_transfer_data below.
-                    // Do NOT take the zero-copy branch.
+                if let Some(state) = hardware.as_ref() {
+                    if state.is_shared_device && raw.format() == Pixel::from(ffi::AVPixelFormat::AV_PIX_FMT_D3D11) {
+                        let current_gpu = resources.gpu_device();
+                        if current_gpu.map_or(0, |g| g.generation) == state.generation {
+                            let cloned_frame = unsafe { ffi::av_frame_clone(raw.as_ptr()) };
+                            if !cloned_frame.is_null() {
+                                struct AvFrameKeeper(*mut ffi::AVFrame);
+                                impl Drop for AvFrameKeeper {
+                                    fn drop(&mut self) {
+                                        unsafe { ffi::av_frame_free(&mut self.0) };
+                                    }
+                                }
+                                unsafe impl Send for AvFrameKeeper {}
+                                unsafe impl Sync for AvFrameKeeper {}
+
+                                let keeper = Arc::new(AvFrameKeeper(cloned_frame));
+                                let tex_ptr = raw.data(0) as usize;
+                                let sub_idx = raw.data(1) as usize as u32;
+
+                                let df = DecodedFrame {
+                                    width: raw.width(),
+                                    height: raw.height(),
+                                    pts: raw_pts,
+                                    time_base_num: tb.numerator(),
+                                    time_base_den: tb.denominator(),
+                                    y_plane: Arc::from([]),
+                                    uv_plane: Arc::from([]),
+                                    y_stride: 0,
+                                    uv_stride: 0,
+                                    chroma_height: (raw.height() + 1) / 2,
+                                    d3d11_texture: Some(Arc::new(frame::D3D11GpuFrame {
+                                        texture_ptr: tex_ptr,
+                                        subresource_index: sub_idx,
+                                        frame_ref: Some(keeper),
+                                    })),
+                                };
+
+                                let decode_us = t_decode_done.duration_since(t0).as_micros() as u64;
+                                total_decode_us += decode_us;
+                                window_zero_copy_frames += 1;
+                                decode_count += 1;
+
+                                if decode_count % METRICS_INTERVAL == 0 {
+                                    let elapsed_s = thread_window.elapsed().as_secs_f64();
+                                    let fps = decode_count as f64 / elapsed_s.max(0.001);
+                                    let avg_dec = total_decode_us / decode_count.max(1);
+                                    let avg_xfer = total_transfer_us / decode_count.max(1);
+                                    let avg_scl = total_scale_us / decode_count.max(1);
+                                    let avg_copy = total_copy_us / decode_count.max(1);
+                                    info!(
+                                        "[NATIVIS DECODE] mode=d3d11va+zero_copy decode_fps={:.1} zero_copy_frames={} readback_frames={} avg_decode_us={}µs avg_transfer_us={}µs avg_scale_us={}µs avg_copy_us={}µs pool_hits={} pool_misses={}",
+                                        fps, window_zero_copy_frames, window_readback_frames, avg_dec, avg_xfer, avg_scl, avg_copy, pool_hits, pool_misses
+                                    );
+                                    decode_count = 0;
+                                    total_decode_us = 0;
+                                    total_transfer_us = 0;
+                                    total_scale_us = 0;
+                                    total_copy_us = 0;
+                                    window_zero_copy_frames = 0;
+                                    window_readback_frames = 0;
+                                    pool_hits = 0;
+                                    pool_misses = 0;
+                                    thread_window = Instant::now();
+                                }
+
+                                match tx.send(df) {
+                                    Ok(()) => {}
+                                    Err(_) => {
+                                        debug!("[NATIVIS DECODE] channel closed, exiting");
+                                        break 'outer;
+                                    }
+                                }
+                                if stop.load(Ordering::Acquire) {
+                                    break 'outer;
+                                }
+                                continue;
+                            }
+                        } else {
+                            warn!(
+                                "[NATIVIS DECODE] Renderer device was recreated (generation mismatch: {} vs {}); falling back to CPU readback",
+                                state.generation,
+                                current_gpu.map_or(0, |g| g.generation)
+                            );
+                        }
+                    }
                 }
 
 
@@ -801,6 +1002,10 @@ fn decoder_thread(
                         *format != source_format || *width != source_width || *height != source_height
                     });
                     if needs_scaler {
+                        if !logged_non_nv12 {
+                            info!("[NATIVIS DECODE] Source format {:?} is 10-bit / non-NV12; converting via CPU swscale", source_format);
+                            logged_non_nv12 = true;
+                        }
                         let Ok(next_scaler) = Scaler::get(
                             source_format,
                             source_width,
@@ -904,6 +1109,7 @@ fn decoder_thread(
                 total_transfer_us += transfer_us;
                 total_scale_us  += scale_us;
                 total_copy_us += copy_us;
+                window_readback_frames += 1;
                 decode_count    += 1;
 
                 if decode_count % METRICS_INTERVAL == 0 {
@@ -913,9 +1119,16 @@ fn decoder_thread(
                     let avg_xfer  = total_transfer_us / decode_count.max(1);
                     let avg_scl   = total_scale_us  / decode_count.max(1);
                     let avg_copy  = total_copy_us / decode_count.max(1);
+                    let active_mode = if window_zero_copy_frames > 0 && window_readback_frames == 0 {
+                        "d3d11va+zero_copy"
+                    } else if window_readback_frames > 0 {
+                        hardware.as_ref().map(|s| s.device_name).unwrap_or("cpu_readback")
+                    } else {
+                        "software"
+                    };
                     info!(
-                        "[NATIVIS DECODE] decode_fps={:.1} avg_decode_us={}µs avg_transfer_us={}µs avg_scale_us={}µs avg_copy_us={}µs (scale_pct={:.0}%) pool_hits={} pool_misses={}",
-                        fps, avg_dec, avg_xfer, avg_scl, avg_copy,
+                        "[NATIVIS DECODE] mode={} decode_fps={:.1} zero_copy_frames={} readback_frames={} avg_decode_us={}µs avg_transfer_us={}µs avg_scale_us={}µs avg_copy_us={}µs (scale_pct={:.0}%) pool_hits={} pool_misses={}",
+                        active_mode, fps, window_zero_copy_frames, window_readback_frames, avg_dec, avg_xfer, avg_scl, avg_copy,
                         (avg_scl as f64 / (avg_dec + avg_xfer + avg_scl + avg_copy).max(1) as f64) * 100.0,
                         pool_hits, pool_misses,
                     );
@@ -924,6 +1137,8 @@ fn decoder_thread(
                     total_transfer_us = 0;
                     total_scale_us  = 0;
                     total_copy_us   = 0;
+                    window_zero_copy_frames = 0;
+                    window_readback_frames = 0;
                     pool_hits       = 0;
                     pool_misses     = 0;
                     thread_window   = Instant::now();
