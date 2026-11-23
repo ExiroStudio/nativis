@@ -1,21 +1,21 @@
-use std::sync::Arc;
 use anyhow::{Context, Result};
 use nativis_core::contract::FrameSink;
 use nativis_core::platform::Platform;
 use nativis_core::resource::ResourceManager;
+use std::sync::Arc;
 use tracing::info;
 
-pub mod workerw;
-pub mod sink;
 pub mod d3d11_renderer;
-pub mod throttler;
 pub mod monitor;
+pub mod sink;
+pub mod throttler;
+pub mod workerw;
 
-pub use workerw::WorkerWContext;
-pub use sink::WindowsDirectSink;
 pub use d3d11_renderer::D3D11Renderer;
-pub use throttler::{Throttler, PauseReason};
 pub use monitor::*;
+pub use sink::WindowsDirectSink;
+pub use throttler::{PauseReason, Throttler};
+pub use workerw::WorkerWContext;
 
 pub struct WindowsPlatform {
     workerw: Option<WorkerWContext>,
@@ -24,7 +24,10 @@ pub struct WindowsPlatform {
 
 impl WindowsPlatform {
     pub fn new() -> Self {
-        Self { workerw: None, event_sender: None }
+        Self {
+            workerw: None,
+            event_sender: None,
+        }
     }
 }
 
@@ -77,8 +80,14 @@ impl Platform for WindowsPlatform {
             return Ok(Box::new(sink));
         }
 
-        let sink = WindowsDirectSink::new(0, 1920, 1080, Arc::new(Throttler::new(0, 0, 0)), resources.clone())
-            .context("Failed to initialize WindowsDirectSink")?;
+        let sink = WindowsDirectSink::new(
+            0,
+            1920,
+            1080,
+            Arc::new(Throttler::new(0, 0, 0)),
+            resources.clone(),
+        )
+        .context("Failed to initialize WindowsDirectSink")?;
         Ok(Box::new(sink))
     }
 
@@ -98,30 +107,37 @@ impl Platform for WindowsPlatform {
             }];
         }
 
-        monitors.into_iter().enumerate().map(|(idx, m)| {
-            let scale = if m.dpi_x > 0 { m.dpi_x as f64 / 96.0 } else { 1.0 };
-            let id = if !m.device_id.is_empty() {
-                m.device_id
-            } else {
-                format!("win-monitor-{}", idx)
-            };
-            let name = if !m.friendly_name.is_empty() {
-                m.friendly_name
-            } else {
-                format!("Display {} ({:?})", idx + 1, m.hmonitor)
-            };
-            nativis_core::platform::OutputInfo {
-                id,
-                name,
-                x: m.rect.0,
-                y: m.rect.1,
-                width: m.width,
-                height: m.height,
-                scale_factor: scale,
-                refresh_rate_mhz: m.refresh_rate_mhz,
-                is_primary: m.is_primary,
-            }
-        }).collect()
+        monitors
+            .into_iter()
+            .enumerate()
+            .map(|(idx, m)| {
+                let scale = if m.dpi_x > 0 {
+                    m.dpi_x as f64 / 96.0
+                } else {
+                    1.0
+                };
+                let id = if !m.device_id.is_empty() {
+                    m.device_id
+                } else {
+                    format!("win-monitor-{}", idx)
+                };
+                let name = if !m.friendly_name.is_empty() {
+                    m.friendly_name
+                } else {
+                    format!("Display {} ({:?})", idx + 1, m.hmonitor)
+                };
+                nativis_core::platform::OutputInfo {
+                    id,
+                    name,
+                    x: m.rect.0,
+                    y: m.rect.1,
+                    width: m.width,
+                    height: m.height,
+                    scale_factor: scale,
+                    refresh_rate_mhz: m.refresh_rate_mhz,
+                    is_primary: m.is_primary,
+                }
+            })
+            .collect()
     }
 }
-

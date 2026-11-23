@@ -1,33 +1,31 @@
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, Ordering};
 use std::sync::Arc;
-use tracing::info;
 #[cfg(windows)]
 use tracing::debug;
+use tracing::info;
 
 // Batch 2: Platform events sent from throttler → conductor via nativis_core::PlatformEvent.
 // nativis-core is already a dependency of this crate; nativis-runtime is NOT (avoids cycle).
 use crossbeam_channel::Sender;
 use nativis_core::platform::PlatformEvent;
 
-
 #[cfg(windows)]
-use windows::{
-    Win32::{
-        Foundation::{HWND, RECT},
-        Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST},
-        System::{
-            Power::POWERBROADCAST_SETTING,
-            SystemServices::GUID_CONSOLE_DISPLAY_STATE,
-            Threading::{GetCurrentProcess, SetProcessWorkingSetSize},
+use windows::Win32::{
+    Foundation::{HWND, RECT},
+    Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST},
+    System::{
+        Power::POWERBROADCAST_SETTING,
+        SystemServices::GUID_CONSOLE_DISPLAY_STATE,
+        Threading::{GetCurrentProcess, SetProcessWorkingSetSize},
+    },
+    UI::{
+        Shell::{
+            SHQueryUserNotificationState, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
         },
-        UI::{
-            Shell::{SHQueryUserNotificationState, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN},
-            WindowsAndMessaging::{
-                FindWindowExW, GetClassNameW, GetForegroundWindow, GetShellWindow, GetSystemMetrics, GetWindowRect, IsIconic,
-                SM_CMONITORS, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-                SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
-                WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
-            },
+        WindowsAndMessaging::{
+            FindWindowExW, GetClassNameW, GetForegroundWindow, GetShellWindow, GetSystemMetrics,
+            GetWindowRect, IsIconic, SM_CMONITORS, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+            SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
         },
     },
 };
@@ -86,7 +84,10 @@ impl ThrottlerState {
         self.reason.store(new_reason as u8, Ordering::SeqCst);
 
         if !prev_paused {
-            info!("Throttler: Desktop rendering PAUSED (reason: {:?})", new_reason);
+            info!(
+                "Throttler: Desktop rendering PAUSED (reason: {:?})",
+                new_reason
+            );
             // Notify conductor directly so orchestrator loop can block with 0.00% CPU
             if let Some(ref sender) = *self.event_sender.read() {
                 let _ = sender.send(PlatformEvent::Pause);
@@ -245,7 +246,8 @@ unsafe fn is_window_covering_screen(hwnd: HWND) -> bool {
     }
 }
 
-static GLOBAL_THROTTLER: parking_lot::RwLock<Option<Arc<ThrottlerState>>> = parking_lot::RwLock::new(None);
+static GLOBAL_THROTTLER: parking_lot::RwLock<Option<Arc<ThrottlerState>>> =
+    parking_lot::RwLock::new(None);
 
 #[derive(Clone)]
 pub struct Throttler {
@@ -254,7 +256,11 @@ pub struct Throttler {
 
 impl Throttler {
     pub fn new(wallpaper_hwnd: isize, progman_hwnd: isize, workerw_hwnd: isize) -> Self {
-        let state = Arc::new(ThrottlerState::new(wallpaper_hwnd, progman_hwnd, workerw_hwnd));
+        let state = Arc::new(ThrottlerState::new(
+            wallpaper_hwnd,
+            progman_hwnd,
+            workerw_hwnd,
+        ));
         *GLOBAL_THROTTLER.write() = Some(Arc::clone(&state));
         Self { state }
     }
@@ -336,7 +342,6 @@ pub fn on_display_changed() {
         }
     }
 }
-
 
 #[cfg(windows)]
 pub unsafe extern "system" fn winevent_proc(
