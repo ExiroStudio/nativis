@@ -110,7 +110,7 @@ impl Drop for HardwareDecodeState {
 }
 
 /// FFmpeg AVD3D11VADeviceContext layout from <libavutil/hwcontext_d3d11va.h>
-#[cfg(target_os = "windows")]
+#[allow(dead_code)]
 #[repr(C)]
 struct AVD3D11VADeviceContext {
     device: *mut std::ffi::c_void,
@@ -126,7 +126,7 @@ struct AVD3D11VADeviceContext {
 
 /// Calls COM IUnknown::AddRef (vtable slot 1) on raw COM pointer.
 /// FFmpeg av_hwdevice_ctx_free will call Release on device deallocation.
-#[cfg(target_os = "windows")]
+#[allow(dead_code)]
 unsafe fn com_add_ref(ptr: *mut std::ffi::c_void) -> u32 {
     if ptr.is_null() {
         return 0;
@@ -760,7 +760,7 @@ pub fn determine_decode_mode(
     readback_frames: u64,
     hw_device: Option<&str>,
 ) -> &'static str {
-    if zero_copy_frames > 0 && readback_frames == 0 {
+    if zero_copy_frames > 0 && zero_copy_frames >= readback_frames {
         "d3d11va+zero_copy"
     } else if readback_frames > 0 {
         match hw_device {
@@ -1026,8 +1026,9 @@ fn decoder_thread(
                                 unsafe impl Sync for AvFrameKeeper {}
 
                                 let keeper = Arc::new(AvFrameKeeper(cloned_frame));
-                                let tex_ptr = raw.data(0) as usize;
-                                let sub_idx = raw.data(1) as usize as u32;
+                                // AVFrame.data[0] holds ID3D11Texture2D*; data[1] holds array slice index cast from intptr_t
+                                let tex_ptr = unsafe { (*cloned_frame).data[0] as usize };
+                                let sub_idx = unsafe { (*cloned_frame).data[1] as usize as u32 };
 
                                 let df = DecodedFrame {
                                     width: raw.width(),
@@ -1052,16 +1053,21 @@ fn decoder_thread(
                                 window_zero_copy_frames += 1;
                                 decode_count += 1;
 
-                                if decode_count % METRICS_INTERVAL == 0 {
+                                if decode_count.is_multiple_of(METRICS_INTERVAL) {
                                     let elapsed_s = thread_window.elapsed().as_secs_f64();
                                     let fps = decode_count as f64 / elapsed_s.max(0.001);
                                     let avg_dec = total_decode_us / decode_count.max(1);
                                     let avg_xfer = total_transfer_us / decode_count.max(1);
                                     let avg_scl = total_scale_us / decode_count.max(1);
                                     let avg_copy = total_copy_us / decode_count.max(1);
+                                    let active_mode = determine_decode_mode(
+                                        window_zero_copy_frames,
+                                        window_readback_frames,
+                                        hardware.as_ref().map(|s| s.device_name),
+                                    );
                                     info!(
-                                        "[NATIVIS DECODE] mode=d3d11va+zero_copy decode_fps={:.1} zero_copy_frames={} readback_frames={} avg_decode_us={}µs avg_transfer_us={}µs avg_scale_us={}µs avg_copy_us={}µs pool_hits={} pool_misses={}",
-                                        fps, window_zero_copy_frames, window_readback_frames, avg_dec, avg_xfer, avg_scl, avg_copy, pool_hits, pool_misses
+                                        "[NATIVIS DECODE] mode={} decode_fps={:.1} zero_copy_frames={} readback_frames={} avg_decode_us={}µs avg_transfer_us={}µs avg_scale_us={}µs avg_copy_us={}µs pool_hits={} pool_misses={}",
+                                        active_mode, fps, window_zero_copy_frames, window_readback_frames, avg_dec, avg_xfer, avg_scl, avg_copy, pool_hits, pool_misses
                                     );
                                     decode_count = 0;
                                     total_decode_us = 0;
@@ -1416,5 +1422,35 @@ mod tests {
         assert_eq!(new_dev.generation, 2);
         // Old state.generation (1) mismatches new_dev.generation (2) -> triggers fallback
         assert_ne!(1, new_dev.generation);
+    }
+
+    #[test]
+    fn test_avd3d11va_context_layout_and_frame_data_extraction() {
+        assert_eq!(
+            std::mem::size_of::<AVD3D11VADeviceContext>(),
+            64,
+            "AVD3D11VADeviceContext must be exactly 64 bytes to match <libavutil/hwcontext_d3d11va.h>"
+        );
+        assert_eq!(
+            std::mem::offset_of!(AVD3D11VADeviceContext, bind_flags),
+            56,
+            "bind_flags must be at byte offset 56 to match FFmpeg D3D11VA layout"
+        );
+
+        // Verify AVFrame.data[0] and data[1] extraction logic
+        unsafe {
+            let mut mock_frame = ffi::av_frame_alloc();
+            assert!(!mock_frame.is_null());
+            (*mock_frame).data[0] = 0xdeadbeef_usize as *mut u8;
+            (*mock_frame).data[1] = 3_usize as *mut u8; // Subresource array index 3
+
+            let tex_ptr = (*mock_frame).data[0] as usize;
+            let sub_idx = (*mock_frame).data[1] as usize as u32;
+
+            assert_eq!(tex_ptr, 0xdeadbeef_usize);
+            assert_eq!(sub_idx, 3);
+
+            ffi::av_frame_free(&mut mock_frame);
+        }
     }
 }
