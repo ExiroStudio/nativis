@@ -1042,8 +1042,16 @@ fn decoder_thread(
                     )
                 };
 
-                // Item 3: 3-slot pre-allocated planar buffer pool (eliminates 308,000 page faults).
-                // Reuses existing heap slices via Arc::get_mut when strong count drops back to 1.
+                // Readback Architecture & Memory Model:
+                // - Copy #1: GPU VRAM -> host memory via av_hwframe_transfer_data.
+                // - Copy #2: FFmpeg AVFrame buffers -> 3-slot pre-allocated planar buffer pool (copy_from_slice).
+                //   Cannot be avoided without exposing FFmpeg-specific AVBufferRef / AVFrame across the
+                //   plugin ABI, which would violate DECISIONS.md D3 (POD, C-compatible ABI).
+                // - Pool Hit Guarantees: With crossbeam bounded(1) queue, at most 1 frame waits in channel,
+                //   1 frame is held by the renderer/sink, and 1 frame is being populated by decoder.
+                //   With 3 slots in the ring, slot recycling always observes strong_count == 1 after warmup,
+                //   yielding 100% steady-state pool hits and eliminating memory allocations/page faults.
+                // - Copy #3: Host memory -> GPU staging/texture in sink via D3D11_MAP_WRITE_DISCARD.
                 let (y_plane, uv_plane) = {
                     let slot = &mut pool[pool_idx];
                     pool_idx = (pool_idx + 1) % 3;
