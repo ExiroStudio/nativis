@@ -1,7 +1,7 @@
+use crate::contract::ResourceHandle;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use crate::contract::ResourceHandle;
 
 /// A media resource, such as a CpuBuffer, Dmabuf, or GPU Texture.
 /// Implementations must support downcasting via `Any`.
@@ -34,20 +34,22 @@ pub enum PixelFormat {
 /// Satu plane data mentah + stride SEBENARNYA (bukan diasumsikan width*N).
 #[derive(Clone)]
 pub struct PlaneDesc {
-    pub data:   Arc<[u8]>,
+    pub data: Arc<[u8]>,
     pub stride: u32,
 }
 
 /// Buffer CPU multi-plane (video). Setara CpuBuffer tapi generik jumlah plane.
 pub struct PlanarBuffer {
-    pub format:  PixelFormat,
-    pub width:   u32,
-    pub height:  u32,
-    pub planes:  Vec<PlaneDesc>, // NV12 = 2 elemen: [Y, UV]
+    pub format: PixelFormat,
+    pub width: u32,
+    pub height: u32,
+    pub planes: Vec<PlaneDesc>, // NV12 = 2 elemen: [Y, UV]
 }
 
 impl Resource for PlanarBuffer {
-    fn as_any(&self) -> &dyn Any { self }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 /// An opaque platform/host GPU device context descriptor (e.g. ID3D11Device* on Windows).
@@ -83,9 +85,6 @@ impl Resource for GpuTextureResource {
     }
 }
 
-
-
-
 /// Central registry for media resources.
 /// Shared between MediaBackends (producers) and FrameSinks (consumers).
 #[derive(Clone, Default)]
@@ -119,7 +118,7 @@ impl ResourceManager {
         let lock = self.resources.lock().unwrap();
         lock.get(&handle).map(|res| f(res.as_ref()))
     }
-    
+
     /// Unregister and free a resource.
     pub fn free(&self, handle: ResourceHandle) {
         self.resources.lock().unwrap().remove(&handle);
@@ -130,7 +129,10 @@ impl ResourceManager {
 
     /// Publish the platform GPU device descriptor (e.g. ID3D11Device on Windows).
     pub fn set_gpu_device(&self, device: GpuDeviceResource) {
-        self.resources.lock().unwrap().insert(Self::GPU_DEVICE_HANDLE, Box::new(device));
+        self.resources
+            .lock()
+            .unwrap()
+            .insert(Self::GPU_DEVICE_HANDLE, Box::new(device));
     }
 
     /// Retrieve the current platform GPU device descriptor, if registered.
