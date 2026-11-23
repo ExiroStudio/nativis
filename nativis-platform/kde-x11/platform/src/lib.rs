@@ -1,12 +1,12 @@
-use std::path::{Path, PathBuf};
-use std::fs;
-use std::process::Command;
-use anyhow::{Context, Result, anyhow};
-use tracing::{info, warn};
-use nativis_core::platform::Platform;
+use anyhow::{anyhow, Context, Result};
 use nativis_core::contract::FrameSink;
+use nativis_core::platform::Platform;
 use nativis_core::resource::ResourceManager;
 use nativis_transport_shm::ShmSink;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use tracing::{info, warn};
 
 pub struct KdePlatform {
     installed_plugin_dir: PathBuf,
@@ -17,8 +17,10 @@ const METADATA_JSON: &[u8] = include_bytes!("../../../../platforms/kde-x11/metad
 const MANIFEST_TOML: &[u8] = include_bytes!("../../../../platforms/kde-x11/manifest.toml");
 const MAIN_QML: &[u8] = include_bytes!("../../../../platforms/kde-x11/contents/ui/main.qml");
 const QMLDIR: &[u8] = include_bytes!("../../../../platforms/kde-x11/contents/ui/qmldir");
-const LIBNATIVISPLUGIN_SO: &[u8] = include_bytes!("../../../../platforms/kde-x11/contents/ui/libnativisplugin.so");
-const LIBNATIVIS_V1_CORE_SO: &[u8] = include_bytes!("../../../../platforms/kde-x11/contents/ui/libnativis_v1_core.so");
+const LIBNATIVISPLUGIN_SO: &[u8] =
+    include_bytes!("../../../../platforms/kde-x11/contents/ui/libnativisplugin.so");
+const LIBNATIVIS_V1_CORE_SO: &[u8] =
+    include_bytes!("../../../../platforms/kde-x11/contents/ui/libnativis_v1_core.so");
 
 fn install_embedded_bundle(target_dir: &Path) -> Result<()> {
     let ui_dir = target_dir.join("contents/ui");
@@ -35,8 +37,14 @@ fn install_embedded_bundle(target_dir: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(ui_dir.join("libnativisplugin.so"), fs::Permissions::from_mode(0o755));
-        let _ = fs::set_permissions(ui_dir.join("libnativis_v1_core.so"), fs::Permissions::from_mode(0o755));
+        let _ = fs::set_permissions(
+            ui_dir.join("libnativisplugin.so"),
+            fs::Permissions::from_mode(0o755),
+        );
+        let _ = fs::set_permissions(
+            ui_dir.join("libnativis_v1_core.so"),
+            fs::Permissions::from_mode(0o755),
+        );
     }
 
     Ok(())
@@ -45,26 +53,38 @@ fn install_embedded_bundle(target_dir: &Path) -> Result<()> {
 impl KdePlatform {
     pub fn new() -> Self {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-        let installed_plugin_dir = Path::new(&home)
-            .join(".local/share/plasma/wallpapers/com.nativis.wallpaper");
+        let installed_plugin_dir =
+            Path::new(&home).join(".local/share/plasma/wallpapers/com.nativis.wallpaper");
 
         Self {
             installed_plugin_dir,
             event_sender: None,
         }
     }
+}
 
+impl Default for KdePlatform {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
+impl KdePlatform {
     fn check_and_install_bundle(&self, force: bool) -> Result<bool> {
         let bundle_dir = find_bundle_dir();
 
         let main_qml = self.installed_plugin_dir.join("contents/ui/main.qml");
-        let plugin_so = self.installed_plugin_dir.join("contents/ui/libnativisplugin.so");
+        let plugin_so = self
+            .installed_plugin_dir
+            .join("contents/ui/libnativisplugin.so");
 
         let needs_install = force || !main_qml.exists() || !plugin_so.exists();
 
         if needs_install {
-            info!("Installing KDE Plasma 5 wallpaper package into {:?}...", self.installed_plugin_dir);
+            info!(
+                "Installing KDE Plasma 5 wallpaper package into {:?}...",
+                self.installed_plugin_dir
+            );
             fs::create_dir_all(&self.installed_plugin_dir)?;
 
             if bundle_dir.exists() {
@@ -104,7 +124,7 @@ impl KdePlatform {
 
         for qdbus_cmd in &["qdbus", "qdbus-qt5", "qdbus5"] {
             let output = Command::new(qdbus_cmd)
-                .args(&[
+                .args([
                     "org.kde.plasmashell",
                     "/PlasmaShell",
                     "org.kde.PlasmaShell.evaluateScript",
@@ -114,7 +134,10 @@ impl KdePlatform {
 
             match output {
                 Ok(out) if out.status.success() => {
-                    info!("Plasma 5 wallpaper plugin reloaded successfully using {}.", qdbus_cmd);
+                    info!(
+                        "Plasma 5 wallpaper plugin reloaded successfully using {}.",
+                        qdbus_cmd
+                    );
                     return Ok(());
                 }
                 Ok(out) => {
@@ -134,10 +157,10 @@ impl KdePlatform {
 impl Platform for KdePlatform {
     fn bootstrap(&mut self, force: bool) -> Result<()> {
         info!("Bootstrapping KdePlatform (force={})...", force);
-        
+
         // 1. Check and install bundle if necessary or forced
         let installed = self.check_and_install_bundle(force)?;
-        
+
         // 2. Reload plasmashell if we installed or updated
         if installed {
             self.reload_plasma()?;
@@ -154,16 +177,64 @@ impl Platform for KdePlatform {
                 run_screensaver_monitor(sender_clone);
             })
             .ok();
+
+        #[cfg(feature = "x11-fullscreen")]
+        {
+            let sender_fs = sender.clone();
+            std::thread::Builder::new()
+                .name("nativis-x11-fullscreen".into())
+                .spawn(move || {
+                    run_x11_fullscreen_monitor(sender_fs);
+                })
+                .ok();
+        }
+
         self.event_sender = Some(sender);
     }
 
     fn create_sink(&self, resources: &ResourceManager) -> Result<Box<dyn FrameSink>> {
-        // Create an SHM region big enough for a 4K frame (3840 * 2160 * 4 bytes + some padding for headers)
-        let shm_size = (3840 * 2160 * 4) + 4096;
-        let sink = ShmSink::new("/nativis_shm", shm_size, resources.clone())
-            .map_err(|e| anyhow!(e))?;
+        let shm_size = detect_initial_shm_size();
+        let sink =
+            ShmSink::new("/nativis_shm", shm_size, resources.clone()).map_err(|e| anyhow!(e))?;
         Ok(Box::new(sink))
     }
+}
+
+fn detect_initial_shm_size() -> usize {
+    // Try to detect primary display resolution via kscreen-doctor
+    if let Ok(output) = Command::new("kscreen-doctor").arg("-o").output() {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                if let Some(geom_idx) = line.find("Geometry:") {
+                    let part = line[geom_idx + "Geometry:".len()..].trim();
+                    if let Some(res) = part.split_whitespace().nth(1) {
+                        let mut dims = res.split('x');
+                        if let (Some(w_str), Some(h_str)) = (dims.next(), dims.next()) {
+                            if let (Ok(w), Ok(h)) = (w_str.parse::<usize>(), h_str.parse::<usize>())
+                            {
+                                if w > 0 && h > 0 {
+                                    let size = (w * h * 4) + 4096;
+                                    info!(
+                                        "Detected display resolution {}x{}; initialized SHM to {} bytes (~{:.1} MB)",
+                                        w, h, size, size as f64 / (1024.0 * 1024.0)
+                                    );
+                                    return size;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Baseline fallback: 1080p RGBA + header (~8.3 MB)
+    let default_size = (1920 * 1080 * 4) + 4096;
+    info!(
+        "Display resolution auto-detect unavailable; using baseline 1080p SHM size ({} bytes)",
+        default_size
+    );
+    default_size
 }
 
 /// Listens for freedesktop ScreenSaver ActiveChanged signals to pause/resume playback
@@ -182,14 +253,17 @@ fn run_screensaver_monitor(sender: nativis_core::platform::PlatformEventSender) 
     let mut child = match child {
         Ok(c) => c,
         Err(e) => {
-            tracing::warn!("Failed to spawn dbus-monitor ({}); lock/screen-off pausing is disabled", e);
+            tracing::warn!(
+                "Failed to spawn dbus-monitor ({}); lock/screen-off pausing is disabled",
+                e
+            );
             return;
         }
     };
     {
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
-            for line in reader.lines().flatten() {
+            for line in reader.lines().map_while(Result::ok) {
                 let trimmed = line.trim();
                 if trimmed.contains("boolean true") {
                     info!("Linux ScreenSaver active: pausing desktop wallpaper (0.00% CPU)");
@@ -205,6 +279,94 @@ fn run_screensaver_monitor(sender: nativis_core::platform::PlatformEventSender) 
     }
 }
 
+#[cfg(feature = "x11-fullscreen")]
+fn run_x11_fullscreen_monitor(sender: nativis_core::platform::PlatformEventSender) {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, EventMask};
+
+    let Ok((conn, screen_num)) = x11rb::connect(None) else {
+        warn!("Failed to connect to X11 server for fullscreen detection");
+        return;
+    };
+
+    let screen = &conn.setup().roots[screen_num];
+    let root = screen.root;
+
+    if conn
+        .change_window_attributes(
+            root,
+            &x11rb::protocol::xproto::ChangeWindowAttributesAux::new()
+                .event_mask(EventMask::PROPERTY_CHANGE),
+        )
+        .is_err()
+    {
+        return;
+    }
+    let _ = conn.flush();
+
+    let Ok(net_active_cookie) = conn.intern_atom(false, b"_NET_ACTIVE_WINDOW") else {
+        return;
+    };
+    let Ok(net_state_cookie) = conn.intern_atom(false, b"_NET_WM_STATE") else {
+        return;
+    };
+    let Ok(net_fullscreen_cookie) = conn.intern_atom(false, b"_NET_WM_STATE_FULLSCREEN") else {
+        return;
+    };
+
+    let Ok(net_active) = net_active_cookie.reply().map(|r| r.atom) else {
+        return;
+    };
+    let Ok(net_state) = net_state_cookie.reply().map(|r| r.atom) else {
+        return;
+    };
+    let Ok(net_fullscreen) = net_fullscreen_cookie.reply().map(|r| r.atom) else {
+        return;
+    };
+
+    let mut is_fullscreen = false;
+
+    loop {
+        let Ok(event) = conn.wait_for_event() else {
+            break;
+        };
+        if let x11rb::protocol::Event::PropertyNotify(ev) = event {
+            if ev.atom == net_active || ev.atom == net_state {
+                let active_win = conn
+                    .get_property(false, root, net_active, AtomEnum::WINDOW, 0, 1)
+                    .ok()
+                    .and_then(|c| c.reply().ok())
+                    .and_then(|r| r.value32().and_then(|mut v| v.next()));
+
+                let mut current_fs = false;
+                if let Some(win) = active_win {
+                    if let Ok(cookie) =
+                        conn.get_property(false, win, net_state, AtomEnum::ATOM, 0, 32)
+                    {
+                        if let Ok(reply) = cookie.reply() {
+                            if let Some(atoms) = reply.value32() {
+                                current_fs = atoms.into_iter().any(|a| a == net_fullscreen);
+                            }
+                        }
+                    }
+                }
+
+                if current_fs != is_fullscreen {
+                    is_fullscreen = current_fs;
+                    if is_fullscreen {
+                        info!(
+                            "X11 active window entered fullscreen: pausing wallpaper (0.00% CPU)"
+                        );
+                        let _ = sender.send(nativis_core::platform::PlatformEvent::Pause);
+                    } else {
+                        info!("X11 active window exited fullscreen: resuming wallpaper");
+                        let _ = sender.send(nativis_core::platform::PlatformEvent::Resume);
+                    }
+                }
+            }
+        }
+    }
+}
 
 impl Drop for KdePlatform {
     fn drop(&mut self) {

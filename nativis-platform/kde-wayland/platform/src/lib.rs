@@ -1,27 +1,30 @@
-use std::path::{Path, PathBuf};
-use std::fs;
-use std::process::Command;
-use anyhow::{Context, Result, anyhow};
-use tracing::{info, warn};
-use nativis_core::platform::Platform;
+use anyhow::{anyhow, Context, Result};
 use nativis_core::contract::FrameSink;
+use nativis_core::platform::Platform;
 use nativis_core::resource::ResourceManager;
 use nativis_transport_shm::ShmSink;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use tracing::{info, warn};
 
 pub struct KdeWaylandPlatform {
     installed_plugin_dir: PathBuf,
     event_sender: Option<nativis_core::platform::PlatformEventSender>,
 }
 
-
 const METADATA_JSON: &[u8] = include_bytes!("../../../../platforms/kde-wayland/metadata.json");
 const MANIFEST_TOML: &[u8] = include_bytes!("../../../../platforms/kde-wayland/manifest.toml");
 const MAIN_QML: &[u8] = include_bytes!("../../../../platforms/kde-wayland/contents/ui/main.qml");
-const CONFIG_QML: &[u8] = include_bytes!("../../../../platforms/kde-wayland/contents/ui/config.qml");
+const CONFIG_QML: &[u8] =
+    include_bytes!("../../../../platforms/kde-wayland/contents/ui/config.qml");
 const QMLDIR: &[u8] = include_bytes!("../../../../platforms/kde-wayland/contents/ui/qmldir");
-const MAIN_XML: &[u8] = include_bytes!("../../../../platforms/kde-wayland/contents/config/main.xml");
-const LIBNATIVISPLUGIN_SO: &[u8] = include_bytes!("../../../../platforms/kde-wayland/contents/ui/libnativisplugin.so");
-const LIBNATIVIS_V2_CORE_SO: &[u8] = include_bytes!("../../../../platforms/kde-wayland/contents/ui/libnativis_v2_core.so");
+const MAIN_XML: &[u8] =
+    include_bytes!("../../../../platforms/kde-wayland/contents/config/main.xml");
+const LIBNATIVISPLUGIN_SO: &[u8] =
+    include_bytes!("../../../../platforms/kde-wayland/contents/ui/libnativisplugin.so");
+const LIBNATIVIS_V2_CORE_SO: &[u8] =
+    include_bytes!("../../../../platforms/kde-wayland/contents/ui/libnativis_v2_core.so");
 
 fn install_embedded_bundle(target_dir: &Path) -> Result<()> {
     let ui_dir = target_dir.join("contents/ui");
@@ -42,8 +45,14 @@ fn install_embedded_bundle(target_dir: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(ui_dir.join("libnativisplugin.so"), fs::Permissions::from_mode(0o755));
-        let _ = fs::set_permissions(ui_dir.join("libnativis_v2_core.so"), fs::Permissions::from_mode(0o755));
+        let _ = fs::set_permissions(
+            ui_dir.join("libnativisplugin.so"),
+            fs::Permissions::from_mode(0o755),
+        );
+        let _ = fs::set_permissions(
+            ui_dir.join("libnativis_v2_core.so"),
+            fs::Permissions::from_mode(0o755),
+        );
     }
 
     Ok(())
@@ -52,26 +61,38 @@ fn install_embedded_bundle(target_dir: &Path) -> Result<()> {
 impl KdeWaylandPlatform {
     pub fn new() -> Self {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-        let installed_plugin_dir = Path::new(&home)
-            .join(".local/share/plasma/wallpapers/com.nativis.wallpaper");
+        let installed_plugin_dir =
+            Path::new(&home).join(".local/share/plasma/wallpapers/com.nativis.wallpaper");
 
         Self {
             installed_plugin_dir,
             event_sender: None,
         }
     }
+}
 
+impl Default for KdeWaylandPlatform {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
+impl KdeWaylandPlatform {
     fn check_and_install_bundle(&self, force: bool) -> Result<bool> {
         let bundle_dir = find_bundle_dir();
 
         let main_qml = self.installed_plugin_dir.join("contents/ui/main.qml");
-        let plugin_so = self.installed_plugin_dir.join("contents/ui/libnativisplugin.so");
+        let plugin_so = self
+            .installed_plugin_dir
+            .join("contents/ui/libnativisplugin.so");
 
         let needs_install = force || !main_qml.exists() || !plugin_so.exists();
 
         if needs_install {
-            info!("Installing KDE Plasma 6 Wayland wallpaper package into {:?}...", self.installed_plugin_dir);
+            info!(
+                "Installing KDE Plasma 6 Wayland wallpaper package into {:?}...",
+                self.installed_plugin_dir
+            );
             fs::create_dir_all(&self.installed_plugin_dir)?;
 
             if bundle_dir.exists() {
@@ -108,10 +129,10 @@ impl KdeWaylandPlatform {
     fn reload_plasma(&self) -> Result<()> {
         info!("Applying Nativis wallpaper to Plasma 6 via DBus...");
         let script = "var Desktops = desktops(); for (i=0;i<Desktops.length;i++) { d = Desktops[i]; d.wallpaperPlugin = 'org.kde.image'; d.wallpaperPlugin = 'com.nativis.wallpaper'; }";
-        
+
         for qdbus_cmd in &["qdbus-qt6", "qdbus6", "qdbus"] {
             let output = Command::new(qdbus_cmd)
-                .args(&[
+                .args([
                     "org.kde.plasmashell",
                     "/PlasmaShell",
                     "org.kde.PlasmaShell.evaluateScript",
@@ -121,7 +142,10 @@ impl KdeWaylandPlatform {
 
             match output {
                 Ok(out) if out.status.success() => {
-                    info!("Plasma 6 wallpaper plugin reloaded successfully using {}.", qdbus_cmd);
+                    info!(
+                        "Plasma 6 wallpaper plugin reloaded successfully using {}.",
+                        qdbus_cmd
+                    );
                     return Ok(());
                 }
                 Ok(out) => {
@@ -191,12 +215,48 @@ impl Platform for KdeWaylandPlatform {
     }
 
     fn create_sink(&self, resources: &ResourceManager) -> Result<Box<dyn FrameSink>> {
-        // Create SHM region big enough for a 4K frame (3840 * 2160 * 4 bytes + 4096 bytes headers)
-        let shm_size = (3840 * 2160 * 4) + 4096;
-        let sink = ShmSink::new("/nativis_shm", shm_size, resources.clone())
-            .map_err(|e| anyhow!(e))?;
+        let shm_size = detect_initial_shm_size();
+        let sink =
+            ShmSink::new("/nativis_shm", shm_size, resources.clone()).map_err(|e| anyhow!(e))?;
         Ok(Box::new(sink))
     }
+}
+
+fn detect_initial_shm_size() -> usize {
+    // Try to detect primary display resolution via kscreen-doctor
+    if let Ok(output) = Command::new("kscreen-doctor").arg("-o").output() {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                if let Some(geom_idx) = line.find("Geometry:") {
+                    let part = line[geom_idx + "Geometry:".len()..].trim();
+                    if let Some(res) = part.split_whitespace().nth(1) {
+                        let mut dims = res.split('x');
+                        if let (Some(w_str), Some(h_str)) = (dims.next(), dims.next()) {
+                            if let (Ok(w), Ok(h)) = (w_str.parse::<usize>(), h_str.parse::<usize>())
+                            {
+                                if w > 0 && h > 0 {
+                                    let size = (w * h * 4) + 4096;
+                                    info!(
+                                        "Detected display resolution {}x{}; initialized SHM to {} bytes (~{:.1} MB)",
+                                        w, h, size, size as f64 / (1024.0 * 1024.0)
+                                    );
+                                    return size;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Baseline fallback: 1080p RGBA + header (~8.3 MB)
+    let default_size = (1920 * 1080 * 4) + 4096;
+    info!(
+        "Display resolution auto-detect unavailable; using baseline 1080p SHM size ({} bytes)",
+        default_size
+    );
+    default_size
 }
 
 /// Listens for freedesktop ScreenSaver ActiveChanged signals to pause/resume playback
@@ -215,14 +275,17 @@ fn run_screensaver_monitor(sender: nativis_core::platform::PlatformEventSender) 
     let mut child = match child {
         Ok(c) => c,
         Err(e) => {
-            tracing::warn!("Failed to spawn dbus-monitor ({}); lock/screen-off pausing is disabled", e);
+            tracing::warn!(
+                "Failed to spawn dbus-monitor ({}); lock/screen-off pausing is disabled",
+                e
+            );
             return;
         }
     };
     {
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
-            for line in reader.lines().flatten() {
+            for line in reader.lines().map_while(Result::ok) {
                 let trimmed = line.trim();
                 if trimmed.contains("boolean true") {
                     info!("Linux ScreenSaver active: pausing desktop wallpaper (0.00% CPU)");
@@ -237,7 +300,6 @@ fn run_screensaver_monitor(sender: nativis_core::platform::PlatformEventSender) 
         let _ = child.kill();
     }
 }
-
 
 impl Drop for KdeWaylandPlatform {
     fn drop(&mut self) {
