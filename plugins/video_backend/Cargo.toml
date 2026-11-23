@@ -8,6 +8,7 @@ authors.workspace = true
 [features]
 default = []
 bundle-ffmpeg = ["ffmpeg-next/build", "dep:ffmpeg-sys-next", "ffmpeg-sys-next/build-portable"]
+vaapi = ["bundle-ffmpeg", "ffmpeg-sys-next/build-vaapi"]
 
 [dependencies]
 nativis-core  = { workspace = true }
