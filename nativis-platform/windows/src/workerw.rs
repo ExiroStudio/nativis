@@ -1,6 +1,6 @@
-use anyhow::{Result, bail};
 #[cfg(windows)]
 use anyhow::Context;
+use anyhow::{bail, Result};
 #[cfg(windows)]
 use tracing::{debug, info, warn};
 
@@ -22,8 +22,8 @@ fn to_wide(s: &str) -> Vec<u16> {
     OsStr::new(s).encode_wide().chain(Some(0)).collect()
 }
 
-use std::sync::Arc;
 use crate::throttler::Throttler;
+use std::sync::Arc;
 
 pub struct WorkerWContext {
     pub progman_hwnd: isize,
@@ -98,11 +98,17 @@ unsafe extern "system" fn wallpaper_wndproc(
         }
         WM_DISPLAYCHANGE | WM_DPICHANGED => {
             let (_vx, _vy, vcx, vcy) = crate::monitor::get_virtual_screen_bounds();
-            debug!("Display configuration or DPI changed. Resizing wallpaper window to {}x{}", vcx, vcy);
+            debug!(
+                "Display configuration or DPI changed. Resizing wallpaper window to {}x{}",
+                vcx, vcy
+            );
             SetWindowPos(
                 hwnd,
                 std::ptr::null_mut(),
-                0, 0, vcx as i32, vcy as i32,
+                0,
+                0,
+                vcx as i32,
+                vcy as i32,
                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
             );
             crate::throttler::on_display_changed();
@@ -119,13 +125,20 @@ unsafe extern "system" fn wallpaper_wndproc(
 #[cfg(windows)]
 unsafe fn discover_workerw(progman: HWND) -> HWND {
     // Topology A: Windows 11 24H2+ (WorkerW as direct child of Progman)
-    let child_workerw = FindWindowExW(progman, std::ptr::null_mut(), to_wide("WorkerW").as_ptr(), std::ptr::null());
+    let child_workerw = FindWindowExW(
+        progman,
+        std::ptr::null_mut(),
+        to_wide("WorkerW").as_ptr(),
+        std::ptr::null(),
+    );
     if !child_workerw.is_null() {
         return child_workerw;
     }
 
     // Topology B: Classic Windows 10 & Windows 11 < 24H2 (WorkerW as sibling via EnumWindows)
-    let mut state = EnumState { workerw_hwnd: std::ptr::null_mut() };
+    let mut state = EnumState {
+        workerw_hwnd: std::ptr::null_mut(),
+    };
     EnumWindows(Some(enum_windows_proc), &mut state as *mut _ as LPARAM);
     state.workerw_hwnd
 }
@@ -185,20 +198,18 @@ impl WorkerWContext {
             }
 
             // 3. Create and attach dedicated wallpaper window on a background window thread
-            let (wallpaper_hwnd, thread_handle) = spawn_wallpaper_window_thread(target_workerw as usize, is_fallback_progman)?;
+            let (wallpaper_hwnd, thread_handle) =
+                spawn_wallpaper_window_thread(target_workerw as usize, is_fallback_progman)?;
 
             let (_vx, _vy, width, height) = crate::monitor::get_virtual_screen_bounds();
 
-            let throttler = Arc::new(Throttler::new(
-                0,
-                progman as isize,
-                target_workerw as isize,
-            ));
+            let throttler = Arc::new(Throttler::new(0, progman as isize, target_workerw as isize));
             throttler.set_wallpaper_hwnd(wallpaper_hwnd as isize);
             throttler.evaluate();
 
             let hwnd_d3d = windows::Win32::Foundation::HWND(wallpaper_hwnd as *mut _);
-            let renderer = match crate::d3d11_renderer::D3D11Renderer::new(hwnd_d3d, width, height) {
+            let renderer = match crate::d3d11_renderer::D3D11Renderer::new(hwnd_d3d, width, height)
+            {
                 Ok(r) => Arc::new(parking_lot::Mutex::new(Some(r))),
                 Err(e) => {
                     warn!("Failed to create initial D3D11Renderer: {:?}", e);
@@ -206,7 +217,8 @@ impl WorkerWContext {
                 }
             };
 
-            let wallpaper_hwnd_atomic = Arc::new(std::sync::atomic::AtomicIsize::new(wallpaper_hwnd as isize));
+            let wallpaper_hwnd_atomic =
+                Arc::new(std::sync::atomic::AtomicIsize::new(wallpaper_hwnd as isize));
 
             // 4. Setup hidden top-level window to recover on Explorer restart (C1 / TaskbarCreated)
             let recovery_ctx = Arc::new(RecoveryContext {
@@ -221,7 +233,10 @@ impl WorkerWContext {
             *RECOVERY_CTX.write() = Some(recovery_ctx);
             let recovery_thread = spawn_recovery_listener();
 
-            info!("WorkerW desktop injection successful. Wallpaper HWND: 0x{:X} ({}x{})", wallpaper_hwnd, width, height);
+            info!(
+                "WorkerW desktop injection successful. Wallpaper HWND: 0x{:X} ({}x{})",
+                wallpaper_hwnd, width, height
+            );
 
             Ok(Self {
                 progman_hwnd: progman as isize,
@@ -285,7 +300,10 @@ unsafe fn spawn_wallpaper_window_thread(
             class_name.as_ptr(),
             to_wide("Nativis Wallpaper").as_ptr(),
             WS_POPUP,
-            x, y, width as i32, height as i32,
+            x,
+            y,
+            width as i32,
+            height as i32,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             hinstance,
@@ -293,7 +311,10 @@ unsafe fn spawn_wallpaper_window_thread(
         );
 
         if hwnd.is_null() {
-            let _ = tx.send(Err(anyhow::anyhow!("Failed to create wallpaper window, error: {}", GetLastError())));
+            let _ = tx.send(Err(anyhow::anyhow!(
+                "Failed to create wallpaper window, error: {}",
+                GetLastError()
+            )));
             return;
         }
 
@@ -307,15 +328,24 @@ unsafe fn spawn_wallpaper_window_thread(
 
         // Position window covering entire virtual screen bounds and make visible
         let (insert_after, insert_flags) = if is_fallback_progman {
-            (HWND_BOTTOM, SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW)
+            (
+                HWND_BOTTOM,
+                SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
+            )
         } else {
-            (std::ptr::null_mut(), SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW)
+            (
+                std::ptr::null_mut(),
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
+            )
         };
 
         SetWindowPos(
             hwnd,
             insert_after,
-            0, 0, width as i32, height as i32,
+            0,
+            0,
+            width as i32,
+            height as i32,
             insert_flags,
         );
 
@@ -362,7 +392,9 @@ unsafe fn spawn_wallpaper_window_thread(
         }
     });
 
-    let hwnd = rx.recv().context("Failed to receive window handle from thread")??;
+    let hwnd = rx
+        .recv()
+        .context("Failed to receive window handle from thread")??;
     Ok((hwnd, thread_handle))
 }
 
@@ -381,7 +413,8 @@ struct RecoveryContext {
 }
 
 #[cfg(windows)]
-static RECOVERY_CTX: parking_lot::RwLock<Option<Arc<RecoveryContext>>> = parking_lot::RwLock::new(None);
+static RECOVERY_CTX: parking_lot::RwLock<Option<Arc<RecoveryContext>>> =
+    parking_lot::RwLock::new(None);
 
 #[cfg(windows)]
 unsafe extern "system" fn recovery_wndproc(
@@ -404,11 +437,8 @@ unsafe extern "system" fn recovery_wndproc(
                             continue;
                         }
 
-                        let combinations: [(usize, isize); 3] = [
-                            (0x0000000D, 1),
-                            (0, 0),
-                            (0x0000000D, 0),
-                        ];
+                        let combinations: [(usize, isize); 3] =
+                            [(0x0000000D, 1), (0, 0), (0x0000000D, 0)];
 
                         let mut target_workerw: HWND = std::ptr::null_mut();
                         for (wparam, lparam) in combinations {
@@ -435,21 +465,33 @@ unsafe extern "system" fn recovery_wndproc(
                         match spawn_wallpaper_window_thread(parent as usize, is_fallback) {
                             Ok((new_hwnd, _th)) => {
                                 info!("Explorer recovery: new wallpaper HWND 0x{:X}", new_hwnd);
-                                ctx.wallpaper_hwnd.store(new_hwnd as isize, std::sync::atomic::Ordering::SeqCst);
+                                ctx.wallpaper_hwnd
+                                    .store(new_hwnd as isize, std::sync::atomic::Ordering::SeqCst);
                                 ctx.throttler.set_wallpaper_hwnd(new_hwnd as isize);
 
                                 let hwnd_win = windows::Win32::Foundation::HWND(new_hwnd as *mut _);
-                                match crate::d3d11_renderer::D3D11Renderer::new(hwnd_win, ctx.width, ctx.height) {
+                                match crate::d3d11_renderer::D3D11Renderer::new(
+                                    hwnd_win, ctx.width, ctx.height,
+                                ) {
                                     Ok(new_r) => {
-                                        let gen = ctx.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                                        let gen = ctx
+                                            .generation
+                                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                                            + 1;
                                         if let Some(res) = ctx.resources.lock().as_ref() {
-                                            let dev_ptr = windows::core::Interface::as_raw(&new_r.device()) as usize;
-                                            let ctx_ptr = windows::core::Interface::as_raw(&new_r.context()) as usize;
-                                            res.set_gpu_device(nativis_core::resource::GpuDeviceResource {
-                                                device_ptr: dev_ptr,
-                                                device_context_ptr: ctx_ptr,
-                                                generation: gen,
-                                            });
+                                            let dev_ptr =
+                                                windows::core::Interface::as_raw(&new_r.device())
+                                                    as usize;
+                                            let ctx_ptr =
+                                                windows::core::Interface::as_raw(&new_r.context())
+                                                    as usize;
+                                            res.set_gpu_device(
+                                                nativis_core::resource::GpuDeviceResource {
+                                                    device_ptr: dev_ptr,
+                                                    device_context_ptr: ctx_ptr,
+                                                    generation: gen,
+                                                },
+                                            );
                                         }
                                         *ctx.renderer.lock() = Some(new_r);
                                         info!("Explorer recovery: swapchain recreated successfully (generation={}). Triggering Redraw.", gen);
@@ -457,12 +499,18 @@ unsafe extern "system" fn recovery_wndproc(
                                         return;
                                     }
                                     Err(e) => {
-                                        warn!("Explorer recovery: D3D11Renderer::new failed: {:?}", e);
+                                        warn!(
+                                            "Explorer recovery: D3D11Renderer::new failed: {:?}",
+                                            e
+                                        );
                                     }
                                 }
                             }
                             Err(e) => {
-                                warn!("Explorer recovery: attempt {} failed to spawn window: {:?}", attempt, e);
+                                warn!(
+                                    "Explorer recovery: attempt {} failed to spawn window: {:?}",
+                                    attempt, e
+                                );
                             }
                         }
                         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -484,52 +532,53 @@ unsafe extern "system" fn recovery_wndproc(
 
 #[cfg(windows)]
 fn spawn_recovery_listener() -> std::thread::JoinHandle<()> {
-    std::thread::spawn(|| {
-        unsafe {
-            let taskbar_msg = RegisterWindowMessageW(to_wide("TaskbarCreated").as_ptr());
-            TASKBAR_CREATED_MSG.store(taskbar_msg, std::sync::atomic::Ordering::SeqCst);
-            debug!("Registered TaskbarCreated message ID: 0x{:X}", taskbar_msg);
+    std::thread::spawn(|| unsafe {
+        let taskbar_msg = RegisterWindowMessageW(to_wide("TaskbarCreated").as_ptr());
+        TASKBAR_CREATED_MSG.store(taskbar_msg, std::sync::atomic::Ordering::SeqCst);
+        debug!("Registered TaskbarCreated message ID: 0x{:X}", taskbar_msg);
 
-            let hinstance = GetModuleHandleW(std::ptr::null());
-            let class_name = to_wide("NativisRecoveryListenerClass");
-            let wnd_class = WNDCLASSEXW {
-                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                style: 0,
-                lpfnWndProc: Some(recovery_wndproc),
-                cbClsExtra: 0,
-                cbWndExtra: 0,
-                hInstance: hinstance,
-                hIcon: std::ptr::null_mut(),
-                hCursor: std::ptr::null_mut(),
-                hbrBackground: std::ptr::null_mut(),
-                lpszMenuName: std::ptr::null(),
-                lpszClassName: class_name.as_ptr(),
-                hIconSm: std::ptr::null_mut(),
-            };
-            RegisterClassExW(&wnd_class);
+        let hinstance = GetModuleHandleW(std::ptr::null());
+        let class_name = to_wide("NativisRecoveryListenerClass");
+        let wnd_class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: 0,
+            lpfnWndProc: Some(recovery_wndproc),
+            cbClsExtra: 0,
+            cbWndExtra: 0,
+            hInstance: hinstance,
+            hIcon: std::ptr::null_mut(),
+            hCursor: std::ptr::null_mut(),
+            hbrBackground: std::ptr::null_mut(),
+            lpszMenuName: std::ptr::null(),
+            lpszClassName: class_name.as_ptr(),
+            hIconSm: std::ptr::null_mut(),
+        };
+        RegisterClassExW(&wnd_class);
 
-            let hwnd = CreateWindowExW(
-                0,
-                class_name.as_ptr(),
-                to_wide("Nativis Recovery Listener").as_ptr(),
-                0,
-                0, 0, 0, 0,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                hinstance,
-                std::ptr::null(),
-            );
+        let hwnd = CreateWindowExW(
+            0,
+            class_name.as_ptr(),
+            to_wide("Nativis Recovery Listener").as_ptr(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            hinstance,
+            std::ptr::null(),
+        );
 
-            if hwnd.is_null() {
-                warn!("Failed to create TaskbarCreated recovery listener window");
-                return;
-            }
+        if hwnd.is_null() {
+            warn!("Failed to create TaskbarCreated recovery listener window");
+            return;
+        }
 
-            let mut msg: MSG = std::mem::zeroed();
-            while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
+        let mut msg: MSG = std::mem::zeroed();
+        while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
         }
     })
 }
@@ -538,9 +587,14 @@ impl Drop for WorkerWContext {
     fn drop(&mut self) {
         #[cfg(windows)]
         unsafe {
-            let hwnd = self.wallpaper_hwnd.load(std::sync::atomic::Ordering::Relaxed);
+            let hwnd = self
+                .wallpaper_hwnd
+                .load(std::sync::atomic::Ordering::Relaxed);
             if hwnd != 0 {
-                info!("Closing Nativis Wallpaper window (HWND: 0x{:X})...", hwnd as usize);
+                info!(
+                    "Closing Nativis Wallpaper window (HWND: 0x{:X})...",
+                    hwnd as usize
+                );
                 PostMessageW(hwnd as HWND, WM_CLOSE, 0, 0);
             }
         }
