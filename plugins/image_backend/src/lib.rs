@@ -1,12 +1,12 @@
 //! `image_backend` — PNG / JPG / WebP image media backend plugin for Nativis.
 
-use std::time::Duration;
 use nativis_asset::AssetPath;
 use nativis_core::{
     clock::MediaClock,
-    contract::{FrameStatus, MediaBackend, MediaCapability, MediaError, Frame},
+    contract::{Frame, FrameStatus, MediaBackend, MediaCapability, MediaError},
     resource::{CpuBuffer, ResourceManager},
 };
+use std::time::Duration;
 use tracing::info;
 
 static CAPABILITIES: &[MediaCapability] = &[MediaCapability::Alpha];
@@ -68,15 +68,28 @@ impl MediaBackend for ImageBackend {
         // Retain a clone of the ResourceManager so close() can free the handle later.
         self.resources = Some(resources.clone());
 
-        let local_path = source
-            .to_file_path()
-            .ok_or_else(|| MediaError::Open(format!("Non-local URIs not supported by ImageBackend: {}", source.raw_uri())))?;
+        let local_path = source.to_file_path().ok_or_else(|| {
+            MediaError::Open(format!(
+                "Non-local URIs not supported by ImageBackend: {}",
+                source.raw_uri()
+            ))
+        })?;
 
-        let bytes = std::fs::read(&local_path)
-            .map_err(|e| MediaError::Open(format!("Failed to read file {}: {}", local_path.display(), e)))?;
+        let bytes = std::fs::read(&local_path).map_err(|e| {
+            MediaError::Open(format!(
+                "Failed to read file {}: {}",
+                local_path.display(),
+                e
+            ))
+        })?;
 
-        let dynamic_img = image::load_from_memory(&bytes)
-            .map_err(|e| MediaError::Decode(format!("Image decode error for {}: {}", source.raw_uri(), e)))?;
+        let dynamic_img = image::load_from_memory(&bytes).map_err(|e| {
+            MediaError::Decode(format!(
+                "Image decode error for {}: {}",
+                source.raw_uri(),
+                e
+            ))
+        })?;
         // Drop raw compressed file bytes immediately to minimize peak memory
         drop(bytes);
 
@@ -85,19 +98,27 @@ impl MediaBackend for ImageBackend {
         // A 4K image downscaled to 1080p uses only ~8.3 MB instead of ~33 MB,
         // which brings total image RSS well under 30 MB.
         let target = self.target_resolution.or_else(|| {
-            std::env::var("NATIVIS_TARGET_RESOLUTION").ok().and_then(|val| {
-                let mut parts = val.split('x');
-                let w: u32 = parts.next()?.parse().ok()?;
-                let h: u32 = parts.next()?.parse().ok()?;
-                Some((w, h))
-            })
+            std::env::var("NATIVIS_TARGET_RESOLUTION")
+                .ok()
+                .and_then(|val| {
+                    let mut parts = val.split('x');
+                    let w: u32 = parts.next()?.parse().ok()?;
+                    let h: u32 = parts.next()?.parse().ok()?;
+                    Some((w, h))
+                })
         });
 
         let dynamic_img = if let Some((max_w, max_h)) = target {
-            if max_w > 0 && max_h > 0 && (dynamic_img.width() > max_w || dynamic_img.height() > max_h) {
+            if max_w > 0
+                && max_h > 0
+                && (dynamic_img.width() > max_w || dynamic_img.height() > max_h)
+            {
                 info!(
                     "ImageBackend: downscaling {}x{} to monitor resolution {}x{}",
-                    dynamic_img.width(), dynamic_img.height(), max_w, max_h
+                    dynamic_img.width(),
+                    dynamic_img.height(),
+                    max_w,
+                    max_h
                 );
                 dynamic_img.resize(max_w, max_h, image::imageops::FilterType::Triangle)
             } else {
@@ -147,12 +168,13 @@ impl MediaBackend for ImageBackend {
             extern "C" {
                 fn malloc_trim(pad: usize) -> std::ffi::c_int;
             }
-            unsafe { malloc_trim(0); }
+            unsafe {
+                malloc_trim(0);
+            }
         }
 
         Ok(())
     }
-
 
     fn source_class(&self) -> nativis_core::contract::SourceClass {
         nativis_core::contract::SourceClass::Declarative
@@ -171,7 +193,9 @@ impl MediaBackend for ImageBackend {
                     extern "C" {
                         fn malloc_trim(pad: usize) -> std::ffi::c_int;
                     }
-                    unsafe { malloc_trim(0); }
+                    unsafe {
+                        malloc_trim(0);
+                    }
                 }
             }
             self.free_on_next_update = false;
@@ -195,7 +219,6 @@ impl MediaBackend for ImageBackend {
             FrameStatus::Idle
         }
     }
-
 
     fn capabilities(&self) -> &[MediaCapability] {
         CAPABILITIES
@@ -225,7 +248,9 @@ impl MediaBackend for ImageBackend {
                 fn malloc_trim(pad: usize) -> std::ffi::c_int;
             }
             // SAFETY: malloc_trim is a standard glibc function with no preconditions.
-            unsafe { malloc_trim(0); }
+            unsafe {
+                malloc_trim(0);
+            }
         }
     }
 }
@@ -237,13 +262,7 @@ mod tests {
 
     #[test]
     fn emits_a_static_frame_once() {
-        let frame = Frame::new(
-            ResourceHandle(1),
-            1,
-            1,
-            Duration::ZERO,
-            true,
-        );
+        let frame = Frame::new(ResourceHandle(1), 1, 1, Duration::ZERO, true);
         let mut backend = ImageBackend {
             frame: Some(frame),
             handle: Some(ResourceHandle(1)),
@@ -261,5 +280,41 @@ mod tests {
         assert!(matches!(backend.current_frame(), FrameStatus::Idle));
     }
 
-}
+    #[test]
+    fn test_frees_cpu_buffer_on_second_tick() {
+        let resources = ResourceManager::new();
+        let cpu_buf = CpuBuffer {
+            data: vec![0u8; 1024],
+            width: 16,
+            height: 16,
+        };
+        let handle = resources.register(Box::new(cpu_buf));
+        assert!(resources.acquire(handle, |_| true).is_some());
 
+        let frame = Frame::new(handle, 16, 16, Duration::ZERO, true);
+        let mut backend = ImageBackend {
+            frame: Some(frame),
+            handle: Some(handle),
+            pending: None,
+            emit_on_next_update: true,
+            free_on_next_update: false,
+            resources: Some(resources.clone()),
+            target_resolution: None,
+        };
+
+        // First tick: emits frame, schedules free_on_next_update
+        backend.update(Duration::ZERO).unwrap();
+        assert!(
+            resources.acquire(handle, |_| true).is_some(),
+            "Buffer must remain alive on first tick for sink to upload"
+        );
+
+        // Second tick: frees CpuBuffer from ResourceManager to release RAM
+        backend.update(Duration::ZERO).unwrap();
+        assert!(
+            resources.acquire(handle, |_| true).is_none(),
+            "CpuBuffer must be freed on second tick to reclaim host RAM"
+        );
+        assert!(backend.handle.is_none());
+    }
+}
