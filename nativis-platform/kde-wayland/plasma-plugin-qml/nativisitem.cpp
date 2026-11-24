@@ -4,6 +4,7 @@
 #include <QImage>
 #include <QDebug>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
 #include <QSGGeometryNode>
@@ -46,6 +47,10 @@ public:
 class Nv12Material : public QSGMaterial
 {
 public:
+    Nv12Material() {
+        setFlag(Blending, false);
+    }
+
     QSGMaterialType *type() const override {
         static QSGMaterialType theType;
         return &theType;
@@ -86,6 +91,9 @@ NativisItem::~NativisItem()
 {
     if (m_watcherThread) {
         m_watcherRunning.store(false, std::memory_order_relaxed);
+        if (m_runtimeCtx) {
+            nativis_wake(m_runtimeCtx);
+        }
         m_watcherThread->wait();
         delete m_watcherThread;
         m_watcherThread = nullptr;
@@ -117,6 +125,9 @@ void NativisItem::itemChange(ItemChange change, const ItemChangeData &value)
     if (change == ItemSceneChange) {
         if (m_watcherThread) {
             m_watcherRunning.store(false, std::memory_order_relaxed);
+            if (m_runtimeCtx) {
+                nativis_wake(m_runtimeCtx);
+            }
             m_watcherThread->wait();
             delete m_watcherThread;
             m_watcherThread = nullptr;
@@ -144,6 +155,14 @@ void NativisItem::itemChange(ItemChange change, const ItemChangeData &value)
 
 QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
 {
+    static const bool forceRgba = qEnvironmentVariableIntValue("NATIVIS_DEBUG_FORCE_RGBA") != 0;
+    static const bool timingDebug = qEnvironmentVariableIntValue("NATIVIS_DEBUG_FRAME_TIMING") != 0;
+
+    QElapsedTimer timingTimer;
+    if (timingDebug) {
+        timingTimer.start();
+    }
+
     int w = qMax(1, static_cast<int>(width()));
     int h = qMax(1, static_cast<int>(height()));
 
@@ -158,6 +177,10 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     }
 
     uint32_t format = nativis_get_format(m_runtimeCtx);
+    if (forceRgba && format == NATIVIS_FORMAT_NV12) {
+        format = NATIVIS_FORMAT_RGBA8888;
+    }
+
     QQuickWindow *win = window();
     if (!win) {
         nativis_end_frame(m_runtimeCtx);
@@ -171,6 +194,10 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     }
     QOpenGLFunctions *f = glCtx->functions();
 
+    // Preserve OpenGL texture binding state
+    GLint prevTex = 0;
+    f->glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
+
     // ── NV12 path (GPU hardware shader conversion) ─────────────────────────
     if (format == NATIVIS_FORMAT_NV12) {
         uint32_t yStride = 0, yW = 0, yH = 0;
@@ -183,6 +210,7 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         nativis_end_frame(m_runtimeCtx);
 
         if (!yData || !uvData || yW == 0 || yH == 0) {
+            f->glBindTexture(GL_TEXTURE_2D, prevTex);
             return oldNode;
         }
 
@@ -283,7 +311,26 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         QSGGeometry::updateTexturedRectGeometry(geoNode->geometry(), rect, QRectF(0, 0, 1, 1));
         geoNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
 
+        // Restore OpenGL state
+        f->glBindTexture(GL_TEXTURE_2D, prevTex);
+
         m_lastUploadedFrameId = currentFrameId;
+
+        if (timingDebug) {
+            static qint64 lastLog = 0;
+            static int frameCount = 0;
+            frameCount++;
+            qint64 now = QDateTime::currentMSecsSinceEpoch();
+            if (now - lastLog >= 1000) {
+                qDebug() << "[NATIVIS TIMING] frameId=" << currentFrameId 
+                         << "paintUs=" << timingTimer.nsecsElapsed() / 1000 
+                         << "format=NV12" 
+                         << "fps=" << frameCount;
+                frameCount = 0;
+                lastLog = now;
+            }
+        }
+
         return geoNode;
     }
 
@@ -300,7 +347,10 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     if (realW <= 0) realW = w;
     if (realH <= 0) realH = h;
 
-    if (!pixels) return oldNode;
+    if (!pixels) {
+        f->glBindTexture(GL_TEXTURE_2D, prevTex);
+        return oldNode;
+    }
 
     QSGSimpleTextureNode *node = wasNv12ActiveRgba ? nullptr : static_cast<QSGSimpleTextureNode *>(oldNode);
     if (!node) {
@@ -347,6 +397,25 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     }
     node->setRect(rect);
 
+    // Restore OpenGL state
+    f->glBindTexture(GL_TEXTURE_2D, prevTex);
+
     m_lastUploadedFrameId = currentFrameId;
+
+    if (timingDebug) {
+        static qint64 lastLog = 0;
+        static int frameCount = 0;
+        frameCount++;
+        qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (now - lastLog >= 1000) {
+            qDebug() << "[NATIVIS TIMING] frameId=" << currentFrameId 
+                     << "paintUs=" << timingTimer.nsecsElapsed() / 1000 
+                     << "format=RGBA" 
+                     << "fps=" << frameCount;
+            frameCount = 0;
+            lastLog = now;
+        }
+    }
+
     return node;
 }

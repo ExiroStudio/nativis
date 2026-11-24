@@ -20,6 +20,7 @@ extern "C" {
     void     nativis_end_frame(void* ctx);
     uint64_t nativis_get_frame_id(void* ctx);  // Phase 1: frame change detection
     uint64_t nativis_wait_frame(void* ctx, uint64_t last_seen_id, uint32_t timeout_ms); // Item 5: futex wait
+    void     nativis_wake(void* ctx);
 
     // Fase 5: Generic plane-based FFI
     uint32_t nativis_get_format(void* ctx);
@@ -48,6 +49,9 @@ public:
 
     void stop() {
         m_running.store(false, std::memory_order_relaxed);
+        if (m_ctx) {
+            nativis_wake(m_ctx);
+        }
     }
 
 signals:

@@ -81,6 +81,10 @@ private:
 class Nv12Material : public QSGMaterial
 {
 public:
+    Nv12Material() {
+        setFlag(Blending, false);
+    }
+
     QSGMaterialType *type() const override {
         static QSGMaterialType theType;
         return &theType;
@@ -192,6 +196,14 @@ void NativisItem::itemChange(ItemChange change, const ItemChangeData &value)
 
 QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
 {
+    static const bool forceRgba = qEnvironmentVariableIntValue("NATIVIS_DEBUG_FORCE_RGBA") != 0;
+    static const bool timingDebug = qEnvironmentVariableIntValue("NATIVIS_DEBUG_FRAME_TIMING") != 0;
+
+    QElapsedTimer timingTimer;
+    if (timingDebug) {
+        timingTimer.start();
+    }
+
     // ── Geometry ───────────────────────────────────────────────────────────
     int w = qMax(1, static_cast<int>(width()));
     int h = qMax(1, static_cast<int>(height()));
@@ -218,6 +230,9 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
 
     // ── Detect format ──────────────────────────────────────────────────────
     uint32_t format = nativis_get_format(m_runtimeCtx);
+    if (forceRgba && format == NATIVIS_FORMAT_NV12) {
+        format = NATIVIS_FORMAT_RGBA8888;
+    }
 
     QQuickWindow *win = window();
     if (!win) {
@@ -265,6 +280,9 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         // state and permanently freezing the render on the old black texture.
         const bool wasNv12Active = m_nv12Active;
         QOpenGLFunctions *f = glCtx->functions();
+
+        GLint prevTex = 0;
+        f->glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
 
         // ── Allocate or reallocate GL textures on resolution change ──
         bool needsRealloc = (m_yTex == 0) || (realW != m_nv12W) || (realH != m_nv12H);
@@ -366,7 +384,27 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         QSGGeometry::updateTexturedRectGeometry(geoNode->geometry(), rect, QRectF(0, 0, 1, 1));
         geoNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
 
+        // Restore OpenGL state and reset scene graph state cache
+        f->glBindTexture(GL_TEXTURE_2D, prevTex);
+        win->resetOpenGLState();
+
         m_lastUploadedFrameId = currentFrameId; // frame actually uploaded — safe to gate on now
+
+        if (timingDebug) {
+            static qint64 lastLog = 0;
+            static int frameCount = 0;
+            frameCount++;
+            qint64 now = QDateTime::currentMSecsSinceEpoch();
+            if (now - lastLog >= 1000) {
+                qDebug() << "[NATIVIS TIMING] frameId=" << currentFrameId 
+                         << "paintUs=" << timingTimer.nsecsElapsed() / 1000 
+                         << "format=NV12" 
+                         << "fps=" << frameCount;
+                frameCount = 0;
+                lastLog = now;
+            }
+        }
+
         return geoNode;
     }
 
@@ -424,6 +462,9 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         QOpenGLContext *glCtx = QOpenGLContext::currentContext();
         if (glCtx) {
             QOpenGLFunctions *f = glCtx->functions();
+            GLint prevTex = 0;
+            f->glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
+
             GLuint texId = static_cast<GLuint>(m_texture->textureId());
             f->glBindTexture(GL_TEXTURE_2D, texId);
             f->glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
@@ -431,6 +472,9 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
                                GL_RGBA, GL_UNSIGNED_BYTE,
                                pixels);
             node->markDirty(QSGNode::DirtyMaterial);
+
+            f->glBindTexture(GL_TEXTURE_2D, prevTex);
+            win->resetOpenGLState();
         }
     }
 
@@ -447,5 +491,21 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     node->setRect(rect);
 
     m_lastUploadedFrameId = currentFrameId; // frame actually uploaded — safe to gate on now
+
+    if (timingDebug) {
+        static qint64 lastLog = 0;
+        static int frameCount = 0;
+        frameCount++;
+        qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (now - lastLog >= 1000) {
+            qDebug() << "[NATIVIS TIMING] frameId=" << currentFrameId 
+                     << "paintUs=" << timingTimer.nsecsElapsed() / 1000 
+                     << "format=RGBA" 
+                     << "fps=" << frameCount;
+            frameCount = 0;
+            lastLog = now;
+        }
+    }
+
     return node;
 }
