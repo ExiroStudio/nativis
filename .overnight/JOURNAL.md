@@ -98,3 +98,12 @@ All technical statements must be labeled:
 - Full xtask bundle: Executed `cargo run -p xtask -- bundle-kde-wayland` assembling complete bundle at `platforms/kde-wayland`.
 - Checkpoint: Created branch `checkpoint/p2`.
 
+### 6. Reviewer Deep-Dive, F-009 to F-012, and Stabilization (Commit 55e73f5)
+- **F-009 (PROVEN)**: Discovered that invoking differential diagnostic `NATIVIS_DEBUG_FORCE_RGBA=1` on NV12 video wallpapers caused an out-of-bounds 4x read past plane 0 (`w * h * 4` vs `w * h`), resulting in SIGSEGV. Implemented `convert_nv12_to_rgba` in both `nativis-v1-core` and `nativis-v2-core` writing to `fallback_buffer`, verified via new unit test `test_nv12_to_rgba_conversion_in_get_pixels`.
+- **F-010 (DOC & TRACED)**: Texture cleanup in `~NativisItem()` executed on the GUI thread where `QOpenGLContext::currentContext()` is null, silently skipping `glDeleteTextures` and leaking GL VRAM across wallpaper reloads. Implemented `TextureCleanupJob` via `QQuickWindow::scheduleRenderJob` on the render thread. Also wrapped GL calls in Qt Quick with `win->beginExternalCommands()` and `win->endExternalCommands()` to reset Qt Quick RHI state cache.
+- **F-011 (TRACED)**: Fixed watcher stop race where `FUTEX_WAKE` could be consumed before `FUTEX_WAIT`, causing a 1000ms freeze on destruction. Added `stopped: AtomicBool` and a 50ms polling loop with re-wake.
+- **F-012 (PROVEN)**: Added `busctl` and `gdbus` support to `scripts/collect-kde-env.sh` (successfully queried live KWin 6.7.5 Wayland compositor) and defined `NATIVIS_FORMAT_P010` in C++ headers.
+- Re-assembled KDE Wayland bundle and updated `libnativis_v1_core.so` in `platforms/kde-x11`.
+- Total test suite expanded to 26/26 tests passing.
+
+

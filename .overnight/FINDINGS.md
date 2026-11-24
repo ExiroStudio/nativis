@@ -75,3 +75,36 @@ Format:
 - Verifikasi: Unit tests pass; verified log emission in test coverage.
 - Risiko perbaikan: None.
 
+### F-009  [S1]  Buffer over-read and crash in plasma-plugin on NATIVIS_DEBUG_FORCE_RGBA=1
+- Lokasi: `nativis-platform/kde-x11/plasma-plugin/src/lib.rs:185`, `kde-wayland/plasma-plugin/src/lib.rs:176`
+- Bukti: PROVEN — When `NATIVIS_DEBUG_FORCE_RGBA=1` is set on video wallpaper, QML plugin treated format as RGBA and called `nativis_get_pixels()`. The Rust consumer returned `candidate_ptr` to Plane 0 (Y plane), which has size `w * h`. The C++ caller then executed `glTexSubImage2D(GL_RGBA, ...)` which read `w * h * 4` bytes (a 4x out-of-bounds read, ~33MB on 4K), causing segfault or corrupted memory read.
+- Dampak: Crashed plasmashell or corrupted memory whenever owner attempted to run the E4 differential test matrix with `NATIVIS_DEBUG_FORCE_RGBA=1`.
+- Perbaikan: Implemented `convert_nv12_to_rgba` inside `nativis_get_pixels()` in both `nativis-v1-core` and `nativis-v2-core`. When format is NV12, frames are converted into `fallback_buffer` (sized `w * h * 4`) so consumers get valid, full-stride RGBA data without out-of-bounds memory accesses.
+- Verifikasi: PROVEN via `test_nv12_to_rgba_conversion_in_get_pixels` in both crates (tested YUV gray conversion to RGBA 130,130,130,255).
+- Risiko perbaikan: Zero overhead on standard NV12 path (only executes when `nativis_get_pixels` is called on NV12 frame).
+
+### F-010  [S2]  OpenGL texture leak on wallpaper destruction/reload (Fact T7)
+- Lokasi: `nativis-platform/kde-x11/plasma-plugin-qml/nativisitem.cpp:153-162`, `kde-wayland/plasma-plugin-qml/nativisitem.cpp:106-115`
+- Bukti: DOC & TRACED — `~NativisItem()` runs on the GUI (main) thread where `QOpenGLContext::currentContext()` returns `nullptr`. The check `if (glCtx)` evaluated to false, skipping `glDeleteTextures(1, &m_yTex)` and `glDeleteTextures(1, &m_uvTex)` completely on every wallpaper change or reload.
+- Dampak: VRAM leak on every wallpaper switch, resolution change, or Plasmashell configuration reload.
+- Perbaikan: Implemented `TextureCleanupJob : public QRunnable` scheduled on the render thread via `win->scheduleRenderJob(..., QQuickWindow::BeforeSynchronizingStage)`. Textures are safely destroyed with the OpenGL context current.
+- Verifikasi: Compiles cleanly with Qt6 CMake build; adheres to Qt Quick SceneGraph threading architecture.
+- Risiko perbaikan: None; standard Qt Scene Graph resource lifecycle pattern.
+
+### F-011  [S2]  FrameWatcher::stop() futex wait race causing 1000ms freeze
+- Lokasi: `nativis-platform/kde-x11/plasma-plugin-qml/nativisitem.cpp:143`, `kde-wayland/plasma-plugin-qml/nativisitem.cpp:98`, and Rust `nativis_wait_frame`
+- Bukti: TRACED — If `stop()` called `nativis_wake()` while watcher was between loop condition check and `nativis_wait_frame`, the futex wake was consumed before `FUTEX_WAIT` started. Because `*futex_ptr` was unchanged, the thread slept for the full 1000ms timeout while GUI thread was blocked in `wait()`.
+- Dampak: Up to 1-second GUI thread freeze when stopping or changing wallpapers.
+- Perbaikan: Added `stopped: AtomicBool` checked inside `nativis_wait_frame` before and after acquiring SHM, set `stopped = true` in `nativis_wake`, and used non-blocking `wait(50)` loop with re-wake in C++ watcher teardown.
+- Verifikasi: Passed all unit tests; `nativis_wait_frame` returns 0 immediately when stopped.
+- Risiko perbaikan: None.
+
+### F-012  [S3]  Missing busctl/gdbus in collect-kde-env.sh and missing NATIVIS_FORMAT_P010 in C++
+- Lokasi: `scripts/collect-kde-env.sh:71`, `nativis-platform/kde-x11/plasma-plugin-qml/nativisitem.h:35`, `kde-wayland/plasma-plugin-qml/nativisitem.h:35`
+- Bukti: PROVEN — Running `scripts/collect-kde-env.sh` reported `qdbus/qdbus6 not found; skipping KWin D-Bus query` despite KWin running under Wayland with systemd `busctl` available. Also, `NATIVIS_FORMAT_P010 = 3` in `nativis-protocol` was missing in C++ headers.
+- Dampak: Incomplete diagnostics for user; potential constant drift.
+- Perbaikan: Added `busctl` and `gdbus` support to `scripts/collect-kde-env.sh`; added `#define NATIVIS_FORMAT_P010 3` to both C++ headers.
+- Verifikasi: Ran `scripts/collect-kde-env.sh` successfully capturing KWin 6.7.5 support information via `busctl`.
+- Risiko perbaikan: None.
+
+

@@ -7,17 +7,19 @@
   - **Empirical Measurement**: Measured via unit test `test_e1_mutex_held_across_futex_wait_blocks_readers`. The reader thread stalled for **370.19ms** waiting for the mutex while the watcher waited for the next frame. At 60 FPS (16.6ms budget), this dropped 20+ consecutive compositor frames, causing window/cursor dragging trails and ghosting over video wallpapers. (Static image wallpaper only runs `updatePaintNode` once, so the lock contention was never triggered for images).
   - **Resolution**: Snapshot `Arc<ShmSurface>` outside the lock. The reader stall dropped from **370.19ms** to **4.8µs** in `nativis-v1-core` and **11.9µs** in `nativis-v2-core` (**37,209x latency reduction**).
   - **Additional Fixes**:
-    - **T5 (FFI Aliasing UB)**: Replaced `&mut *(ctx as *mut NativisConsumer)` across concurrent threads with atomic fields (`AtomicUsize`, `AtomicU64`) and `Mutex<Vec<u8>>` for the fallback buffer.
-    - **T6 (GUI Thread Hang)**: Added `nativis_wake(ctx)` via `FUTEX_WAKE` to unblock `FrameWatcher` immediately on exit/reload, eliminating up to 1000ms GUI freeze.
+    - **T7 (VRAM Leak on GUI Thread — F-010)**: `~NativisItem()` runs on GUI thread where GL context is null. Implemented `TextureCleanupJob` via `win->scheduleRenderJob()` to delete textures on render thread with active context. Wrapped GL calls with `beginExternalCommands()`/`endExternalCommands()` for Qt Quick RHI state isolation.
+    - **T9 (Buffer Over-Read on Force-RGBA — F-009)**: `NATIVIS_DEBUG_FORCE_RGBA=1` previously caused `nativis_get_pixels()` to return Y-plane pointer for NV12 frames, causing a 4x out-of-bounds read and crash in `glTexSubImage2D(GL_RGBA)`. Added `convert_nv12_to_rgba` writing to `fallback_buffer`.
+    - **T6 / F-011 (GUI Thread Hang & Futex Race)**: Added `nativis_wake(ctx)` via `FUTEX_WAKE` and `stopped: AtomicBool` plus a non-blocking wait loop, eliminating up to 1000ms GUI freeze during teardown/reload.
+    - **T5 (FFI Aliasing UB)**: Replaced `&mut *(ctx as *mut NativisConsumer)` across concurrent threads with atomic fields (`AtomicUsize`, `AtomicU64`, `AtomicBool`) and `Mutex<Vec<u8>>` for fallback buffer.
     - **T8 (Syscall Overhead)**: Replaced per-FFI `libc::fstat` inside `ensure_shm()` with in-memory header magic validation (~420 fewer syscalls/sec at 60 FPS).
     - **T3/H4 (OpenGL Hygiene)**: Preserved and restored `GL_TEXTURE_BINDING_2D` across texture uploads in `updatePaintNode`, set `setFlag(Blending, false)` on `Nv12Material`.
-    - **Diagnostics**: Added `NATIVIS_DEBUG_FORCE_RGBA=1` and `NATIVIS_DEBUG_FRAME_TIMING=1`. Created environment collector script `scripts/collect-kde-env.sh`.
+    - **Diagnostics**: Added `NATIVIS_DEBUG_FORCE_RGBA=1` and `NATIVIS_DEBUG_FRAME_TIMING=1`. Added `busctl`/`gdbus` fallbacks to `scripts/collect-kde-env.sh`.
 
 - **Cross-Repo Audit & Fixes (P1) — COMPLETE**:
   - **Multi-Monitor Futex Wake**: In `nativis-core/transport-shm`, changed `FUTEX_WAKE` count from `1i32` to `libc::INT_MAX`. This ensures multi-monitor setups wake all screen watchers simultaneously instead of starving secondary monitors down to 1-2 FPS.
   - **Dead Broken Feature Cleaned**: Removed broken `video` / `bundle-ffmpeg` features and unused `ffmpeg-next` dependency from `nativis-core/media` (which referenced non-existent `video_source.rs` and violated architectural decisions D1/D2).
   - **Clippy & Code Formatting**: Resolved all clippy warnings across all workspace targets (`div_ceil`, needless borrows, redundant closures, stream flattening). `cargo clippy --workspace --all-targets` and `cargo fmt --check` are 100% clean.
-  - **Test Suite**: 24/24 unit and integration tests passing.
+  - **Test Suite**: 26/26 unit and integration tests passing.
 
 - **Performance & GPU Decode (P2) — VERIFIED & COMPLETED**:
   - **Windows D3D11VA Zero-Copy**: Changed default `NATIVIS_D3D11_ZERO_COPY` to `false` for safety (requiring explicit opt-in). Verified automatic fallback to CPU readback baseline when disabled or on generation mismatch (Explorer restart).
@@ -33,9 +35,10 @@
 | Commit Hash | Checkpoint Branch | Description | Files Touched |
 |---|---|---|---|
 | `c55c038` | — | `chore(overnight): initialize overnight tracking files` | `.overnight/*`, `scripts/collect-kde-env.sh` |
-| `a555831` | `checkpoint/p0` | `fix(plasma): release SHM lock across futex wait and eliminate FFI mutable aliasing` | `nativis-platform/kde-x11/*`, `nativis-platform/kde-wayland/*` |
+| `a555831` | — | `fix(plasma): release SHM lock across futex wait and eliminate FFI mutable aliasing` | `nativis-platform/kde-x11/*`, `nativis-platform/kde-wayland/*` |
 | `3377999` | `checkpoint/p1` | `fix(audit): resolve cross-repo clippy warnings, multi-monitor futex wake, and clean media crate` | `nativis-core/*`, `nativis-platform/wayland/*`, `xtask/*`, `src/main.rs` |
 | `ce48428` | `checkpoint/p2` | `fix(perf): conservative zero-copy default, non-silent fallback logging, and updated kde-wayland bundle` | `plugins/video_backend/*`, `platforms/kde-wayland/*` |
+| `55e73f5` | `checkpoint/p0` | `fix(plasma): eliminate NV12 force-RGBA over-read, leak on GUI thread, and watcher stop race` | `nativis-platform/*`, `platforms/*`, `scripts/*` |
 
 ---
 
@@ -46,6 +49,8 @@
 | **P0: Lock-Free SHM Wait** | N/A (Direct swapchain) | Fixed (`nativis-v1-core`) | Fixed (`nativis-v2-core`) | Fixed (`transport-shm`) |
 | **P0: FFI Thread Safety (Atomics)** | N/A | Fixed (`&const NativisConsumer`) | Fixed (`&const NativisConsumer`) | N/A |
 | **P0: Non-blocking Stop Wake** | N/A | Fixed (`nativis_wake`) | Fixed (`nativis_wake`) | N/A |
+| **P0: Render Thread GL Cleanup** | N/A | Fixed (`TextureCleanupJob`) | Fixed (`TextureCleanupJob`) | N/A |
+| **P0: NV12 Force-RGBA Safety** | N/A | Fixed (`convert_nv12_to_rgba`) | Fixed (`convert_nv12_to_rgba`) | N/A |
 | **P0: GL State Preservation** | N/A (DirectX/D3D11) | Fixed (`updatePaintNode`) | Fixed (`updatePaintNode`) | N/A (Wgpu) |
 | **P1: Multi-Monitor Wake** | N/A | Broadcast `INT_MAX` | Broadcast `INT_MAX` | Broadcast `INT_MAX` |
 | **P2: HW Decode Baseline** | D3D11VA + CPU readback | VAAPI + CPU readback | VAAPI + CPU readback | VAAPI + CPU readback |
@@ -57,7 +62,7 @@
 
 ## Checkpoints
 
-1. `checkpoint/p0`: Commit `a555831` (KDE Plasma ghosting & trail bug fix).
+1. `checkpoint/p0`: Commit `55e73f5` (KDE Plasma ghosting & trail bug fix, VRAM leak fix, force-RGBA safety).
 2. `checkpoint/p1`: Commit `3377999` (Cross-repo audit, clippy, dead code removal, multi-monitor wake).
 3. `checkpoint/p2`: Commit `ce48428` (Performance, zero-copy safety default, non-silent fallback, assembled bundle).
 
