@@ -5,8 +5,8 @@ use nativis_rhi::TextureHandle;
 pub enum PixelFormat {
     Rgba8,
     Bgra8,
-    Nv12,   // Y plane + interleaved UV — hardware decoder output
-    P010,   // 10-bit NV12 for HDR / 10-bit content
+    Nv12, // Y plane + interleaved UV — hardware decoder output
+    P010, // 10-bit NV12 for HDR / 10-bit content
 }
 
 /// Color space and transfer characteristics of the decoded frame.
@@ -34,11 +34,11 @@ pub enum MediaState {
 /// `IMediaSource::release_frame()` after the render pass has consumed it.
 #[derive(Debug, Clone)]
 pub struct VideoFrame {
-    pub texture:      TextureHandle,
+    pub texture: TextureHandle,
     pub timestamp_ns: u64,
-    pub duration_ns:  u64,
-    pub width:        u32,
-    pub height:       u32,
-    pub format:       PixelFormat,
-    pub color_space:  ColorSpace,
+    pub duration_ns: u64,
+    pub width: u32,
+    pub height: u32,
+    pub format: PixelFormat,
+    pub color_space: ColorSpace,
 }

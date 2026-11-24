@@ -419,7 +419,15 @@ impl FrameSink for ShmSink {
             // Eliminates 240 Hz busy polling in plasmashell, dropping wakeups from 240/s to 0/s when idle.
             unsafe {
                 let futex_ptr = handle.ptr.add(8) as *mut u32;
-                libc::syscall(libc::SYS_futex, futex_ptr, libc::FUTEX_WAKE, 1i32, 0, 0, 0);
+                libc::syscall(
+                    libc::SYS_futex,
+                    futex_ptr,
+                    libc::FUTEX_WAKE,
+                    libc::INT_MAX,
+                    0,
+                    0,
+                    0,
+                );
             }
         }
 

@@ -28,15 +28,30 @@ impl RhiContext {
 
     /// Allocate a new GPU texture.
     pub fn create_texture(&self, desc: &TextureDescriptor) -> Result<TextureHandle, RhiError> {
-        let wgpu_format = desc.format.to_wgpu()
+        let wgpu_format = desc
+            .format
+            .to_wgpu()
             .ok_or_else(|| RhiError::Backend("TextureFormat not directly supported".into()))?;
 
         let mut usage = wgpu::TextureUsages::empty();
-        if desc.usage.contains(crate::types::TextureUsage::COPY_SRC) { usage |= wgpu::TextureUsages::COPY_SRC; }
-        if desc.usage.contains(crate::types::TextureUsage::COPY_DST) { usage |= wgpu::TextureUsages::COPY_DST; }
-        if desc.usage.contains(crate::types::TextureUsage::SAMPLED) { usage |= wgpu::TextureUsages::TEXTURE_BINDING; }
-        if desc.usage.contains(crate::types::TextureUsage::RENDER_TARGET) { usage |= wgpu::TextureUsages::RENDER_ATTACHMENT; }
-        if desc.usage.contains(crate::types::TextureUsage::STORAGE) { usage |= wgpu::TextureUsages::STORAGE_BINDING; }
+        if desc.usage.contains(crate::types::TextureUsage::COPY_SRC) {
+            usage |= wgpu::TextureUsages::COPY_SRC;
+        }
+        if desc.usage.contains(crate::types::TextureUsage::COPY_DST) {
+            usage |= wgpu::TextureUsages::COPY_DST;
+        }
+        if desc.usage.contains(crate::types::TextureUsage::SAMPLED) {
+            usage |= wgpu::TextureUsages::TEXTURE_BINDING;
+        }
+        if desc
+            .usage
+            .contains(crate::types::TextureUsage::RENDER_TARGET)
+        {
+            usage |= wgpu::TextureUsages::RENDER_ATTACHMENT;
+        }
+        if desc.usage.contains(crate::types::TextureUsage::STORAGE) {
+            usage |= wgpu::TextureUsages::STORAGE_BINDING;
+        }
 
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: desc.label.as_deref(),
@@ -61,13 +76,22 @@ impl RhiContext {
         // Store texture to prevent it being dropped.
         let _texture = Arc::new(texture);
 
-        Ok(TextureHandle::from_arc_view(view, _texture, desc.width, desc.height))
+        Ok(TextureHandle::from_arc_view(
+            view,
+            _texture,
+            desc.width,
+            desc.height,
+        ))
     }
 
     /// Upload raw pixel data to a GPU texture.
-    pub fn upload_texture(&self, handle: &TextureHandle, data: &[u8], bytes_per_row: u32) -> Result<(), RhiError> {
-        let (_view_ref, tex_ref) = handle.raw_refs()
-            .ok_or(RhiError::InvalidHandle)?;
+    pub fn upload_texture(
+        &self,
+        handle: &TextureHandle,
+        data: &[u8],
+        bytes_per_row: u32,
+    ) -> Result<(), RhiError> {
+        let (_view_ref, tex_ref) = handle.raw_refs().ok_or(RhiError::InvalidHandle)?;
 
         self.queue.write_texture(
             wgpu::ImageCopyTexture {

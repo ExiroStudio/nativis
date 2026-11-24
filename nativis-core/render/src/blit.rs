@@ -1,7 +1,5 @@
 //! Screen-space blit pass: renders a media texture onto a full-screen quad.
 
-
-
 /// WGSL blit shader — full-screen triangle trick, no vertex buffer needed.
 const BLIT_SHADER: &str = r#"
 struct VertexOutput {
@@ -31,14 +29,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 /// A compiled screen-space blit pipeline.
 pub struct BlitPipeline {
     pipeline: wgpu::RenderPipeline,
-    sampler:  wgpu::Sampler,
+    sampler: wgpu::Sampler,
     bind_layout: wgpu::BindGroupLayout,
 }
 
 impl BlitPipeline {
     pub fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label:  Some("blit_shader"),
+            label: Some("blit_shader"),
             source: wgpu::ShaderSource::Wgsl(BLIT_SHADER.into()),
         });
 
@@ -46,17 +44,17 @@ impl BlitPipeline {
             label: Some("blit_bind_layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
-                    binding:    0,
+                    binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        multisampled:   false,
+                        multisampled: false,
                         view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type:    wgpu::TextureSampleType::Float { filterable: true },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     },
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
-                    binding:    1,
+                    binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
@@ -65,73 +63,77 @@ impl BlitPipeline {
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label:                Some("blit_pipeline_layout"),
-            bind_group_layouts:   &[&bind_layout],
+            label: Some("blit_pipeline_layout"),
+            bind_group_layouts: &[&bind_layout],
             push_constant_ranges: &[],
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label:  Some("blit_pipeline"),
+            label: Some("blit_pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
-                module:      &shader,
+                module: &shader,
                 entry_point: "vs_main",
 
-                buffers:     &[],
+                buffers: &[],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
-                module:      &shader,
+                module: &shader,
                 entry_point: "fs_main",
 
-                targets:     &[Some(wgpu::ColorTargetState {
-                    format:     surface_format,
-                    blend:      Some(wgpu::BlendState::REPLACE),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
-                topology:          wgpu::PrimitiveTopology::TriangleList,
+                topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
-                front_face:        wgpu::FrontFace::Ccw,
-                cull_mode:         None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
                 ..Default::default()
             },
             depth_stencil: None,
-            multisample:   wgpu::MultisampleState::default(),
-            multiview:     None,
-            cache:         None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
         });
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label:     Some("blit_sampler"),
+            label: Some("blit_sampler"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
 
-        Self { pipeline, sampler, bind_layout }
+        Self {
+            pipeline,
+            sampler,
+            bind_layout,
+        }
     }
 
     /// Execute the blit pass: draw `media_view` into `target_view`.
     pub fn execute(
         &self,
         device: &wgpu::Device,
-        queue:  &wgpu::Queue,
-        media_view:  &wgpu::TextureView,
+        queue: &wgpu::Queue,
+        media_view: &wgpu::TextureView,
         target_view: &wgpu::TextureView,
     ) {
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label:  Some("blit_bind_group"),
+            label: Some("blit_bind_group"),
             layout: &self.bind_layout,
             entries: &[
                 wgpu::BindGroupEntry {
-                    binding:  0,
+                    binding: 0,
                     resource: wgpu::BindingResource::TextureView(media_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding:  1,
+                    binding: 1,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
             ],
@@ -145,16 +147,16 @@ impl BlitPipeline {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("blit_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view:           target_view,
+                    view: target_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load:  wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes:         None,
-                occlusion_query_set:      None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
             });
 
             pass.set_pipeline(&self.pipeline);

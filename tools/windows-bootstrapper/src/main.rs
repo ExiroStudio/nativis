@@ -11,7 +11,9 @@ const PAYLOAD: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/payload.tar.gz"
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if PAYLOAD.is_empty() {
-        eprintln!("Error: Nativis standalone package payload is empty. Build with NATIVIS_PAYLOAD set.");
+        eprintln!(
+            "Error: Nativis standalone package payload is empty. Build with NATIVIS_PAYLOAD set."
+        );
         std::process::exit(1);
     }
 
@@ -113,7 +115,8 @@ mod tests {
             header.set_size(content.len() as u64);
             header.set_mode(0o755);
             header.set_cksum();
-            tar.append_data(&mut header, "test.txt", &content[..]).unwrap();
+            tar.append_data(&mut header, "test.txt", &content[..])
+                .unwrap();
             tar.finish().unwrap();
         }
         let gz_bytes = enc.finish().unwrap();

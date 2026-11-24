@@ -16,7 +16,9 @@ pub struct EventBus {
 
 impl EventBus {
     pub fn new() -> Self {
-        Self { listeners: Arc::new(Mutex::new(Vec::new())) }
+        Self {
+            listeners: Arc::new(Mutex::new(Vec::new())),
+        }
     }
 
     /// Subscribe to *all* engine events. The callback receives a shared
@@ -52,7 +54,9 @@ mod tests {
         let bus = EventBus::new();
         let count = Arc::new(AtomicU32::new(0));
         let c = count.clone();
-        bus.subscribe(move |_| { c.fetch_add(1, Ordering::Relaxed); });
+        bus.subscribe(move |_| {
+            c.fetch_add(1, Ordering::Relaxed);
+        });
         bus.publish(EngineEvent::EngineStarted);
         bus.publish(EngineEvent::EngineShutdown);
         assert_eq!(count.load(Ordering::Relaxed), 2);

@@ -63,47 +63,50 @@ impl FrameSink for WaylandDirectSink {
         renderer.resize(shell.state.width, shell.state.height);
 
         // 3. Acquire frame pixel data and render
-        let success = self.resources.acquire(frame.resource, |res| {
-            // NV12 Multi-plane Video path
-            if let Some(planar) = res.as_any().downcast_ref::<PlanarBuffer>() {
-                if planar.planes.len() < 2 {
-                    return false;
-                }
+        let success = self
+            .resources
+            .acquire(frame.resource, |res| {
+                // NV12 Multi-plane Video path
+                if let Some(planar) = res.as_any().downcast_ref::<PlanarBuffer>() {
+                    if planar.planes.len() < 2 {
+                        return false;
+                    }
 
-                let y_plane = &planar.planes[0];
-                let uv_plane = &planar.planes[1];
+                    let y_plane = &planar.planes[0];
+                    let uv_plane = &planar.planes[1];
 
-                let y_w = planar.width;
-                let y_h = planar.height;
-                let uv_w = (planar.width + 1) / 2;
-                let uv_h = (planar.height + 1) / 2;
+                    let y_w = planar.width;
+                    let y_h = planar.height;
+                    let uv_w = planar.width.div_ceil(2);
+                    let uv_h = planar.height.div_ceil(2);
 
-                if let Err(e) = renderer.draw_nv12(
-                    &y_plane.data,
-                    y_plane.stride,
-                    y_w,
-                    y_h,
-                    &uv_plane.data,
-                    uv_plane.stride,
-                    uv_w,
-                    uv_h,
-                ) {
-                    warn!("WGPU draw_nv12 error: {}", e);
-                    return false;
+                    if let Err(e) = renderer.draw_nv12(
+                        &y_plane.data,
+                        y_plane.stride,
+                        y_w,
+                        y_h,
+                        &uv_plane.data,
+                        uv_plane.stride,
+                        uv_w,
+                        uv_h,
+                    ) {
+                        warn!("WGPU draw_nv12 error: {}", e);
+                        return false;
+                    }
+                    true
                 }
-                true
-            }
-            // RGBA Static Image / Fallback path
-            else if let Some(cpu) = res.as_any().downcast_ref::<CpuBuffer>() {
-                if let Err(e) = renderer.draw_rgba(&cpu.data, cpu.width, cpu.height) {
-                    warn!("WGPU draw_rgba error: {}", e);
-                    return false;
+                // RGBA Static Image / Fallback path
+                else if let Some(cpu) = res.as_any().downcast_ref::<CpuBuffer>() {
+                    if let Err(e) = renderer.draw_rgba(&cpu.data, cpu.width, cpu.height) {
+                        warn!("WGPU draw_rgba error: {}", e);
+                        return false;
+                    }
+                    true
+                } else {
+                    false
                 }
-                true
-            } else {
-                false
-            }
-        }).unwrap_or(false);
+            })
+            .unwrap_or(false);
 
         if !success {
             return Err(MediaError::GpuUpload(
@@ -111,7 +114,10 @@ impl FrameSink for WaylandDirectSink {
             ));
         }
 
-        debug!("Presented frame {}x{} on Wayland Layer::Bottom", frame.width, frame.height);
+        debug!(
+            "Presented frame {}x{} on Wayland Layer::Bottom",
+            frame.width, frame.height
+        );
         Ok(())
     }
 }

@@ -3,8 +3,8 @@ use nativis_core::contract::FrameSink;
 use nativis_core::platform::Platform;
 use nativis_core::resource::ResourceManager;
 
-pub mod shell;
 pub mod render;
+pub mod shell;
 pub mod sink;
 
 pub use sink::WaylandDirectSink;
@@ -25,10 +25,16 @@ impl Default for WaylandPlatform {
 
 impl Platform for WaylandPlatform {
     fn bootstrap(&mut self, _force: bool) -> Result<()> {
-        tracing::info!("Bootstrapping WaylandPlatform (zwlr_layer_shell_v1, layer auto-detected)...");
+        tracing::info!(
+            "Bootstrapping WaylandPlatform (zwlr_layer_shell_v1, layer auto-detected)..."
+        );
 
         // Verify Wayland environment is active
-        if std::env::var("WAYLAND_DISPLAY").is_err() && std::env::var("XDG_SESSION_TYPE").map(|s| s.to_lowercase() != "wayland").unwrap_or(true) {
+        if std::env::var("WAYLAND_DISPLAY").is_err()
+            && std::env::var("XDG_SESSION_TYPE")
+                .map(|s| s.to_lowercase() != "wayland")
+                .unwrap_or(true)
+        {
             bail!("Wayland display not detected (WAYLAND_DISPLAY or XDG_SESSION_TYPE=wayland missing)");
         }
 
@@ -57,7 +63,6 @@ impl Platform for WaylandPlatform {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,4 +74,3 @@ mod tests {
         let _ = platform.bootstrap(false);
     }
 }
-

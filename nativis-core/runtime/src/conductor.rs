@@ -3,13 +3,13 @@
 //! The runtime knows nothing about media files, decoders, or rendering.
 //! It only knows how to drive a `MediaBackend` and submit its frames to a `FrameSink`.
 
+use crossbeam_channel::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
-use crossbeam_channel::{Receiver, RecvTimeoutError};
 
 use nativis_asset::AssetPath;
 use nativis_core::clock::MediaClock;
-use nativis_core::contract::{FrameStatus, MediaBackend, FrameSink};
+use nativis_core::contract::{FrameSink, FrameStatus, MediaBackend};
 use nativis_core::resource::ResourceManager;
 
 /// Commands that can be dynamically sent to the running conductor.
@@ -42,9 +42,6 @@ pub enum RuntimeCommand {
     /// Platform event (Pause, Resume, Redraw) forwarded from the platform layer.
     PlatformEvent(nativis_core::platform::PlatformEvent),
 }
-
-
-
 
 /// Target configuration for the runtime orchestrator.
 pub struct RuntimeConfig {
@@ -97,7 +94,8 @@ impl Runtime {
     ) -> anyhow::Result<()> {
         info!("Runtime started orchestrating: {}", backend.name());
 
-        let mut target_frame_time = Duration::from_secs_f64(1.0 / self.config.target_fps.max(1) as f64);
+        let mut target_frame_time =
+            Duration::from_secs_f64(1.0 / self.config.target_fps.max(1) as f64);
         let mut last_tick = Instant::now();
         // User pause (IPC) and platform pause (fullscreen/lock/display-off) are tracked
         // separately so a platform Resume can never override an explicit user pause.
@@ -110,7 +108,6 @@ impl Runtime {
         let mut last_frame: Option<nativis_core::contract::Frame> = None;
         let mut current_source: Option<AssetPath> = initial_source;
 
-
         loop {
             // Process any pending commands without blocking the frame loop
             while let Some(cmd) = pending_cmd.take().or_else(|| command_rx.try_recv().ok()) {
@@ -122,7 +119,11 @@ impl Runtime {
                         last_frame = None;
                         backend = new_backend;
                     }
-                    RuntimeCommand::OpenAndSwap { backend: mut new_backend, source, reply } => {
+                    RuntimeCommand::OpenAndSwap {
+                        backend: mut new_backend,
+                        source,
+                        reply,
+                    } => {
                         // Close old backend first so only one decoder runs at a time (K4).
                         info!(
                             "OpenAndSwap: closing '{}', opening '{}' for '{}'",
@@ -149,10 +150,15 @@ impl Runtime {
                                     e,
                                 );
                                 if let Some(ref old_source) = current_source {
-                                    if let Err(re_err) = backend.open(old_source, &clock, &resources) {
+                                    if let Err(re_err) =
+                                        backend.open(old_source, &clock, &resources)
+                                    {
                                         warn!("OpenAndSwap rollback failed: {}", re_err);
                                     } else {
-                                        info!("OpenAndSwap: successfully rolled back to '{}'", old_source.raw_uri());
+                                        info!(
+                                            "OpenAndSwap: successfully rolled back to '{}'",
+                                            old_source.raw_uri()
+                                        );
                                     }
                                 }
                                 if let Some(tx) = reply {
@@ -164,12 +170,18 @@ impl Runtime {
                     RuntimeCommand::SetPause(paused) => {
                         user_paused = paused;
                         is_paused = user_paused || platform_paused;
-                        info!("Playback paused: {} (user={}, platform={})", is_paused, user_paused, platform_paused);
+                        info!(
+                            "Playback paused: {} (user={}, platform={})",
+                            is_paused, user_paused, platform_paused
+                        );
                     }
                     RuntimeCommand::TogglePause => {
                         user_paused = !user_paused;
                         is_paused = user_paused || platform_paused;
-                        info!("Playback paused: {} (user={}, platform={})", is_paused, user_paused, platform_paused);
+                        info!(
+                            "Playback paused: {} (user={}, platform={})",
+                            is_paused, user_paused, platform_paused
+                        );
                     }
                     RuntimeCommand::SetFps(fps) => {
                         target_frame_time = Duration::from_secs_f64(1.0 / fps.max(1) as f64);
@@ -199,7 +211,10 @@ impl Runtime {
                         nativis_core::platform::PlatformEvent::Resume => {
                             platform_paused = false;
                             is_paused = user_paused || platform_paused;
-                            info!("Platform event: platform pause cleared (playback paused={})", is_paused);
+                            info!(
+                                "Platform event: platform pause cleared (playback paused={})",
+                                is_paused
+                            );
                             if let Some(ref frame) = last_frame {
                                 if let Err(e) = sink.submit(frame.clone()) {
                                     warn!("PlatformEvent::Resume redraw error: {}", e);
@@ -213,11 +228,9 @@ impl Runtime {
                                 }
                             }
                         }
-                    }
+                    },
                 }
             }
-
-
 
             if is_paused {
                 // True 0.00% CPU usage when paused (game running, display sleep, or user paused):
@@ -228,16 +241,16 @@ impl Runtime {
                 // at ~100% CPU (measured 99.4%). Now we break and shut down gracefully.
                 match command_rx.recv() {
                     Ok(cmd) => pending_cmd = Some(cmd),
-                    Err(_)  => {
-                        info!("Conductor: command channel disconnected while paused — shutting down.");
+                    Err(_) => {
+                        info!(
+                            "Conductor: command channel disconnected while paused — shutting down."
+                        );
                         break;
                     }
                 }
                 last_tick = Instant::now();
                 continue;
             }
-
-
 
             let now = Instant::now();
             let dt = now.duration_since(last_tick);
@@ -250,7 +263,7 @@ impl Runtime {
 
             // 2. Fetch the latest frame
             let status = backend.current_frame();
-            
+
             // 3. Submit to transport sink
             let mut is_idle = false;
             match status {
@@ -274,7 +287,6 @@ impl Runtime {
                 }
             }
 
-
             if is_idle {
                 // Phase 2 Event-Driven Cadence:
                 // Block until a new runtime command arrives (e.g. SetWallpaper, Pause, Stop)
@@ -285,17 +297,18 @@ impl Runtime {
                 // have dropped, causing the loop to spin at ~100% CPU (measured 99.8%).
                 // Break on disconnect to shut down gracefully instead.
                 match command_rx.recv_timeout(Duration::from_secs(1)) {
-                    Ok(cmd)                             => pending_cmd = Some(cmd),
-                    Err(RecvTimeoutError::Timeout)      => {}
+                    Ok(cmd) => pending_cmd = Some(cmd),
+                    Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => {
-                        info!("Conductor: command channel disconnected while idle — shutting down.");
+                        info!(
+                            "Conductor: command channel disconnected while idle — shutting down."
+                        );
                         break;
                     }
                 }
                 last_tick = Instant::now();
                 continue;
             }
-
 
             // Dynamic frame pacing via backend.next_deadline() (Items 6 & 8)
             // Allows 30 fps video to sleep ~33ms, waking conductor ~30 times/s instead of 60.
@@ -315,8 +328,8 @@ impl Runtime {
             if sleep_duration > Duration::ZERO {
                 let capped = sleep_duration.min(target_frame_time * 2);
                 match command_rx.recv_timeout(capped) {
-                    Ok(cmd)                             => pending_cmd = Some(cmd),
-                    Err(RecvTimeoutError::Timeout)      => {}
+                    Ok(cmd) => pending_cmd = Some(cmd),
+                    Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => {
                         info!("Conductor: command channel disconnected — shutting down.");
                         break;
@@ -325,11 +338,9 @@ impl Runtime {
             }
         }
 
-
-
         info!("Runtime orchestrator finished.");
         backend.close();
-        
+
         Ok(())
     }
 }
@@ -349,19 +360,36 @@ mod tests {
     }
 
     impl MediaBackend for MockBackend {
-        fn name(&self) -> &'static str { "mock" }
-        fn open(&mut self, _s: &AssetPath, _c: &MediaClock, _r: &ResourceManager) -> Result<(), MediaError> { Ok(()) }
+        fn name(&self) -> &'static str {
+            "mock"
+        }
+        fn open(
+            &mut self,
+            _s: &AssetPath,
+            _c: &MediaClock,
+            _r: &ResourceManager,
+        ) -> Result<(), MediaError> {
+            Ok(())
+        }
         fn close(&mut self) {}
         fn update(&mut self, _dt: Duration) -> Result<(), MediaError> {
             self.updates.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
-        fn current_frame(&self) -> FrameStatus { self.status.clone() }
-        fn capabilities(&self) -> &[MediaCapability] { &[] }
-        fn supports(&self, _s: &AssetPath) -> bool { true }
+        fn current_frame(&self) -> FrameStatus {
+            self.status.clone()
+        }
+        fn capabilities(&self) -> &[MediaCapability] {
+            &[]
+        }
+        fn supports(&self, _s: &AssetPath) -> bool {
+            true
+        }
     }
 
-    struct MockSink { submits: Arc<Mutex<Vec<u64>>> }
+    struct MockSink {
+        submits: Arc<Mutex<Vec<u64>>>,
+    }
 
     impl FrameSink for MockSink {
         fn submit(&mut self, frame: Frame) -> Result<(), MediaError> {
@@ -374,11 +402,21 @@ mod tests {
         backend: MockBackend,
         sink: MockSink,
         fps: u32,
-    ) -> (crossbeam_channel::Sender<RuntimeCommand>, std::thread::JoinHandle<()>) {
+    ) -> (
+        crossbeam_channel::Sender<RuntimeCommand>,
+        std::thread::JoinHandle<()>,
+    ) {
         let (tx, rx) = unbounded();
         let h = std::thread::spawn(move || {
             Runtime::new(RuntimeConfig { target_fps: fps })
-                .run_with_commands(Box::new(backend), Box::new(sink), rx, ResourceManager::new(), MediaClock::new(), None)
+                .run_with_commands(
+                    Box::new(backend),
+                    Box::new(sink),
+                    rx,
+                    ResourceManager::new(),
+                    MediaClock::new(),
+                    None,
+                )
                 .unwrap();
         });
         (tx, h)
@@ -388,8 +426,13 @@ mod tests {
     fn user_pause_survives_platform_resume() {
         let updates = Arc::new(AtomicUsize::new(0));
         let (tx, h) = spawn_runtime(
-            MockBackend { updates: updates.clone(), status: FrameStatus::Unchanged },
-            MockSink { submits: Arc::new(Mutex::new(vec![])) },
+            MockBackend {
+                updates: updates.clone(),
+                status: FrameStatus::Unchanged,
+            },
+            MockSink {
+                submits: Arc::new(Mutex::new(vec![])),
+            },
             120,
         );
         std::thread::sleep(Duration::from_millis(30));
@@ -397,14 +440,23 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         let paused_at = updates.load(Ordering::SeqCst);
 
-        tx.send(RuntimeCommand::PlatformEvent(PlatformEvent::Pause)).unwrap();
-        tx.send(RuntimeCommand::PlatformEvent(PlatformEvent::Resume)).unwrap();
+        tx.send(RuntimeCommand::PlatformEvent(PlatformEvent::Pause))
+            .unwrap();
+        tx.send(RuntimeCommand::PlatformEvent(PlatformEvent::Resume))
+            .unwrap();
         std::thread::sleep(Duration::from_millis(60));
-        assert_eq!(updates.load(Ordering::SeqCst), paused_at, "platform Resume overrode the user pause");
+        assert_eq!(
+            updates.load(Ordering::SeqCst),
+            paused_at,
+            "platform Resume overrode the user pause"
+        );
 
         tx.send(RuntimeCommand::SetPause(false)).unwrap();
         std::thread::sleep(Duration::from_millis(60));
-        assert!(updates.load(Ordering::SeqCst) > paused_at, "did not resume after the user unpaused");
+        assert!(
+            updates.load(Ordering::SeqCst) > paused_at,
+            "did not resume after the user unpaused"
+        );
 
         tx.send(RuntimeCommand::Stop).unwrap();
         h.join().unwrap();
@@ -414,17 +466,28 @@ mod tests {
     fn platform_pause_blocks_and_resume_restarts() {
         let updates = Arc::new(AtomicUsize::new(0));
         let (tx, h) = spawn_runtime(
-            MockBackend { updates: updates.clone(), status: FrameStatus::Unchanged },
-            MockSink { submits: Arc::new(Mutex::new(vec![])) },
+            MockBackend {
+                updates: updates.clone(),
+                status: FrameStatus::Unchanged,
+            },
+            MockSink {
+                submits: Arc::new(Mutex::new(vec![])),
+            },
             120,
         );
-        tx.send(RuntimeCommand::PlatformEvent(PlatformEvent::Pause)).unwrap();
+        tx.send(RuntimeCommand::PlatformEvent(PlatformEvent::Pause))
+            .unwrap();
         std::thread::sleep(Duration::from_millis(60));
         let a = updates.load(Ordering::SeqCst);
         std::thread::sleep(Duration::from_millis(60));
-        assert_eq!(updates.load(Ordering::SeqCst), a, "conductor kept updating while platform-paused");
+        assert_eq!(
+            updates.load(Ordering::SeqCst),
+            a,
+            "conductor kept updating while platform-paused"
+        );
 
-        tx.send(RuntimeCommand::PlatformEvent(PlatformEvent::Resume)).unwrap();
+        tx.send(RuntimeCommand::PlatformEvent(PlatformEvent::Resume))
+            .unwrap();
         std::thread::sleep(Duration::from_millis(60));
         assert!(updates.load(Ordering::SeqCst) > a);
         tx.send(RuntimeCommand::Stop).unwrap();
@@ -436,26 +499,45 @@ mod tests {
         let submits = Arc::new(Mutex::new(Vec::new()));
         let frame = Frame::new(ResourceHandle(42), 16, 16, Duration::ZERO, true);
         let (tx, h) = spawn_runtime(
-            MockBackend { updates: Arc::new(AtomicUsize::new(0)), status: FrameStatus::Ready(frame) },
-            MockSink { submits: submits.clone() },
+            MockBackend {
+                updates: Arc::new(AtomicUsize::new(0)),
+                status: FrameStatus::Ready(frame),
+            },
+            MockSink {
+                submits: submits.clone(),
+            },
             60,
         );
         std::thread::sleep(Duration::from_millis(40));
-        assert!(!submits.lock().unwrap().is_empty(), "first frame was never submitted");
+        assert!(
+            !submits.lock().unwrap().is_empty(),
+            "first frame was never submitted"
+        );
 
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
         tx.send(RuntimeCommand::OpenAndSwap {
-            backend: Box::new(MockBackend { updates: Arc::new(AtomicUsize::new(0)), status: FrameStatus::Unchanged }),
+            backend: Box::new(MockBackend {
+                updates: Arc::new(AtomicUsize::new(0)),
+                status: FrameStatus::Unchanged,
+            }),
             source: AssetPath::parse("memory://x.png").unwrap(),
             reply: Some(reply_tx),
-        }).unwrap();
-        reply_rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+        })
+        .unwrap();
+        reply_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
         submits.lock().unwrap().clear();
 
         tx.send(RuntimeCommand::Redraw).unwrap();
-        tx.send(RuntimeCommand::PlatformEvent(PlatformEvent::Resume)).unwrap();
+        tx.send(RuntimeCommand::PlatformEvent(PlatformEvent::Resume))
+            .unwrap();
         std::thread::sleep(Duration::from_millis(60));
-        assert!(submits.lock().unwrap().is_empty(), "stale frame from the closed backend was re-submitted");
+        assert!(
+            submits.lock().unwrap().is_empty(),
+            "stale frame from the closed backend was re-submitted"
+        );
 
         tx.send(RuntimeCommand::Stop).unwrap();
         h.join().unwrap();
@@ -464,8 +546,13 @@ mod tests {
     #[test]
     fn exits_when_command_channel_disconnects_while_idle() {
         let (tx, h) = spawn_runtime(
-            MockBackend { updates: Arc::new(AtomicUsize::new(0)), status: FrameStatus::Idle },
-            MockSink { submits: Arc::new(Mutex::new(vec![])) },
+            MockBackend {
+                updates: Arc::new(AtomicUsize::new(0)),
+                status: FrameStatus::Idle,
+            },
+            MockSink {
+                submits: Arc::new(Mutex::new(vec![])),
+            },
             60,
         );
         std::thread::sleep(Duration::from_millis(30));
@@ -476,8 +563,13 @@ mod tests {
     #[test]
     fn exits_when_command_channel_disconnects_while_paused() {
         let (tx, h) = spawn_runtime(
-            MockBackend { updates: Arc::new(AtomicUsize::new(0)), status: FrameStatus::Unchanged },
-            MockSink { submits: Arc::new(Mutex::new(vec![])) },
+            MockBackend {
+                updates: Arc::new(AtomicUsize::new(0)),
+                status: FrameStatus::Unchanged,
+            },
+            MockSink {
+                submits: Arc::new(Mutex::new(vec![])),
+            },
             60,
         );
         tx.send(RuntimeCommand::SetPause(true)).unwrap();

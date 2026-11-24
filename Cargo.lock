@@ -3033,7 +3033,6 @@ name = "nativis-media"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
- "ffmpeg-next",
  "image",
  "nativis-asset",
  "nativis-core",

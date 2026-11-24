@@ -1,4 +1,4 @@
-use crate::frame::{VideoFrame, MediaState};
+use crate::frame::{MediaState, VideoFrame};
 use nativis_rhi::RhiContext;
 use thiserror::Error;
 
@@ -44,7 +44,7 @@ pub trait IMediaSource: Send + Sync {
     fn state(&self) -> MediaState;
 
     // ── Optional playback control (no-op defaults for static sources) ────────
-    fn play(&mut self)  {}
+    fn play(&mut self) {}
     fn pause(&mut self) {}
     fn seek(&mut self, _ns: u64) {}
     fn set_looping(&mut self, _looping: bool) {}

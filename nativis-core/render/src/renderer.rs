@@ -8,7 +8,7 @@
 //!   3. Post      — Optional PostEffect chain
 //!   4. Present  — IRhiBackend::present()
 
-use nativis_core::contract::{FrameStatus, Frame};
+use nativis_core::contract::{Frame, FrameStatus};
 use nativis_rhi::{IRhiBackend, TextureFormat};
 use tracing::{debug, warn};
 
@@ -17,17 +17,17 @@ use crate::post::PostEffect;
 
 /// The render engine. Created once. Never knows what the media source is.
 pub struct Renderer {
-    blit:        Option<BlitPipeline>,
+    blit: Option<BlitPipeline>,
     post_effects: Vec<Box<dyn PostEffect>>,
-    last_frame:  Option<Frame>,
+    last_frame: Option<Frame>,
 }
 
 impl Renderer {
     pub fn new() -> Self {
         Self {
-            blit:         None,
+            blit: None,
             post_effects: Vec::new(),
-            last_frame:   None,
+            last_frame: None,
         }
     }
 
@@ -36,9 +36,9 @@ impl Renderer {
         // Build the blit pipeline for the surface format.
         let fmt = rhi.surface_format();
         let wgpu_fmt = match fmt {
-            TextureFormat::Bgra8Unorm     => wgpu::TextureFormat::Bgra8Unorm,
+            TextureFormat::Bgra8Unorm => wgpu::TextureFormat::Bgra8Unorm,
             TextureFormat::Bgra8UnormSrgb => wgpu::TextureFormat::Bgra8UnormSrgb,
-            TextureFormat::Rgba8Unorm     => wgpu::TextureFormat::Rgba8Unorm,
+            TextureFormat::Rgba8Unorm => wgpu::TextureFormat::Rgba8Unorm,
             TextureFormat::Rgba8UnormSrgb => wgpu::TextureFormat::Rgba8UnormSrgb,
             _ => wgpu::TextureFormat::Rgba8Unorm,
         };
@@ -77,9 +77,7 @@ impl Renderer {
                 self.last_frame = Some(f.clone());
                 Some(f)
             }
-            FrameStatus::Unchanged | FrameStatus::Idle => {
-                self.last_frame.clone()
-            }
+            FrameStatus::Unchanged | FrameStatus::Idle => self.last_frame.clone(),
             FrameStatus::EndOfStream => {
                 debug!("Media end of stream — holding last frame");
                 self.last_frame.clone()
@@ -90,11 +88,10 @@ impl Renderer {
             let _surface_view = rhi.surface_texture().wgpu_view();
             let _ctx = rhi.rhi_context();
 
-
             // Post-effects: if any are registered, render to an intermediate
             // texture, then chain through each effect to the surface.
             // For now (no effects), blit directly to surface.
-            
+
             // FIXME(V6): Renderer needs access to ResourceManager to resolve Frame::resource
             // into a TextureHandle for wgpu blitting. Disabled temporarily.
             /*
@@ -126,5 +123,7 @@ impl Renderer {
 }
 
 impl Default for Renderer {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

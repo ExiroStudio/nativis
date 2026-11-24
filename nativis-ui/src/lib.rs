@@ -1,10 +1,12 @@
 slint::include_modules!();
 
-use std::path::Path;
 use anyhow::Result;
-use tracing::{info, warn};
+use nativis_ipc::{
+    detect_environment, is_daemon_running, send_command, IpcCommand, IpcResponse, UserConfig,
+};
 use slint::{Model, ModelRc, VecModel};
-use nativis_ipc::{IpcCommand, IpcResponse, UserConfig, detect_environment, is_daemon_running, send_command};
+use std::path::Path;
+use tracing::{info, warn};
 
 /// Main entry point to launch the Nativis Modern UI.
 pub fn run_ui() -> Result<()> {
@@ -20,7 +22,13 @@ pub fn run_ui() -> Result<()> {
     // 2. Detect and populate Host Environment Diagnostics
     let env_info = detect_environment();
     app.set_detected_os(env_info.os_release.into());
-    app.set_detected_de(format!("{} ({})", env_info.desktop_environment, env_info.display_server).into());
+    app.set_detected_de(
+        format!(
+            "{} ({})",
+            env_info.desktop_environment, env_info.display_server
+        )
+        .into(),
+    );
     app.set_active_sink_name(env_info.active_sink_name.into());
 
     // 3. Discover local wallpapers in current directory / common directories
@@ -99,7 +107,10 @@ pub fn run_ui() -> Result<()> {
                 info!("Daemon response: {:?}", other);
             }
             Err(e) => {
-                warn!("Could not reach daemon via IPC ({}). Engine may be offline.", e);
+                warn!(
+                    "Could not reach daemon via IPC ({}). Engine may be offline.",
+                    e
+                );
                 if let Some(app) = app_weak.upgrade() {
                     app.set_engine_status_text("Engine Offline".into());
                 }
@@ -111,7 +122,11 @@ pub fn run_ui() -> Result<()> {
     app.on_toggle_pause(move || {
         if let Some(app) = app_weak_pause.upgrade() {
             let next_running = !app.get_engine_running();
-            let cmd = if next_running { IpcCommand::Resume } else { IpcCommand::Pause };
+            let cmd = if next_running {
+                IpcCommand::Resume
+            } else {
+                IpcCommand::Pause
+            };
             let _ = send_command(&cmd);
             app.set_engine_running(next_running);
             app.set_engine_status_text(if next_running {
@@ -132,7 +147,9 @@ pub fn run_ui() -> Result<()> {
 
     app.on_install_plugin(move |name| {
         info!("UI requested to install plugin: {}", name);
-        let _ = send_command(&IpcCommand::InstallPlugin { name: name.to_string() });
+        let _ = send_command(&IpcCommand::InstallPlugin {
+            name: name.to_string(),
+        });
     });
 
     let app_weak_add = app.as_weak();
@@ -143,7 +160,7 @@ pub fn run_ui() -> Result<()> {
             let mut items: Vec<WallpaperData> = (0..current.row_count())
                 .filter_map(|i| current.row_data(i))
                 .collect();
-            
+
             // Add a mock or scanned item as demonstration
             items.push(WallpaperData {
                 name: "CustomWallpaper.mp4".into(),

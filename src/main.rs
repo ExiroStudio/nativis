@@ -1,16 +1,16 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use anyhow::{Context, Result};
 use crossbeam_channel::{unbounded, Sender};
 use parking_lot::RwLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tracing::{error, info, warn};
 
 use nativis_asset::AssetPath;
 use nativis_core::clock::MediaClock;
 use nativis_core::resource::ResourceManager;
 use nativis_ipc::{
-    detect_environment, get_socket_path, is_daemon_running, send_command, EngineStatus,
-    IpcCommand, IpcResponse, UserConfig,
+    detect_environment, get_socket_path, is_daemon_running, send_command, EngineStatus, IpcCommand,
+    IpcResponse, UserConfig,
 };
 use nativis_plugin::PluginManager;
 use nativis_plugin_image::ImageBackend;
@@ -80,7 +80,10 @@ fn main() -> Result<()> {
                             println!("🌌 Nativis Engine Status:");
                             println!("  Running:      {}", status.is_running);
                             println!("  Paused:       {}", status.is_paused);
-                            println!("  Wallpaper:    {}", status.active_wallpaper.as_deref().unwrap_or("None"));
+                            println!(
+                                "  Wallpaper:    {}",
+                                status.active_wallpaper.as_deref().unwrap_or("None")
+                            );
                             println!("  Target FPS:   {}", status.target_fps);
                             println!("  Active Sink:  {}", status.active_sink);
                             println!("  Platform:     {}", status.platform);
@@ -151,8 +154,14 @@ fn main() -> Result<()> {
             }
             "--no-gui" | "no-gui" | "--daemon" | "daemon" => {
                 let cfg = UserConfig::load();
-                let initial_wallpaper = args.get(2).map(|s| s.as_str()).unwrap_or(&cfg.active_wallpaper);
-                info!("Starting Nativis background daemon (--no-gui) with wallpaper: {}", initial_wallpaper);
+                let initial_wallpaper = args
+                    .get(2)
+                    .map(|s| s.as_str())
+                    .unwrap_or(&cfg.active_wallpaper);
+                info!(
+                    "Starting Nativis background daemon (--no-gui) with wallpaper: {}",
+                    initial_wallpaper
+                );
                 return run_daemon(Some(initial_wallpaper));
             }
             "--decode-worker" => {
@@ -202,7 +211,10 @@ fn main() -> Result<()> {
 
     // Default with no arguments: Load saved user configuration and launch Modern UI!
     let cfg = UserConfig::load();
-    info!("No arguments provided. Launching Nativis Modern UI with saved wallpaper: {}", cfg.active_wallpaper);
+    info!(
+        "No arguments provided. Launching Nativis Modern UI with saved wallpaper: {}",
+        cfg.active_wallpaper
+    );
     ensure_daemon_running(Some(&cfg.active_wallpaper))?;
     nativis_ui::run_ui()
 }
@@ -218,10 +230,11 @@ fn ensure_daemon_running(default_wallpaper: Option<&str>) -> Result<()> {
             cmd.arg(wp);
         }
         cmd.stdin(std::process::Stdio::null())
-           .stdout(std::process::Stdio::null())
-           .stderr(std::process::Stdio::inherit());
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::inherit());
 
-        cmd.spawn().context("Failed to spawn background daemon process")?;
+        cmd.spawn()
+            .context("Failed to spawn background daemon process")?;
 
         // Give the daemon a moment to bind the IPC socket
         for _ in 0..30 {
@@ -261,8 +274,12 @@ fn run_daemon(initial_wallpaper: Option<&str>) -> Result<()> {
         .spawn(move || {
             while let Ok(event) = platform_rx.recv() {
                 match event {
-                    nativis_core::platform::PlatformEvent::Pause => bridge_platform_paused.store(true, Ordering::SeqCst),
-                    nativis_core::platform::PlatformEvent::Resume => bridge_platform_paused.store(false, Ordering::SeqCst),
+                    nativis_core::platform::PlatformEvent::Pause => {
+                        bridge_platform_paused.store(true, Ordering::SeqCst)
+                    }
+                    nativis_core::platform::PlatformEvent::Resume => {
+                        bridge_platform_paused.store(false, Ordering::SeqCst)
+                    }
                     nativis_core::platform::PlatformEvent::Redraw => {}
                 }
                 let _ = cmd_tx_bridge.send(RuntimeCommand::PlatformEvent(event));
@@ -271,7 +288,6 @@ fn run_daemon(initial_wallpaper: Option<&str>) -> Result<()> {
 
     platform.bootstrap(false)?;
     let sink = platform.create_sink(&resources)?;
-
 
     // 2. Start IPC Server Listener
     let _ipc_handle = start_ipc_server(
@@ -284,7 +300,8 @@ fn run_daemon(initial_wallpaper: Option<&str>) -> Result<()> {
 
     // 3. Initial media backend
     let initial_uri = initial_wallpaper.unwrap_or("arlenchino.mp4");
-    let asset_path = AssetPath::parse(initial_uri).unwrap_or_else(|_| AssetPath::parse("CuteBunny.jpg").unwrap());
+    let asset_path = AssetPath::parse(initial_uri)
+        .unwrap_or_else(|_| AssetPath::parse("CuteBunny.jpg").unwrap());
 
     let mut plugin_manager = PluginManager::new();
     plugin_manager.register("image_backend", || Box::new(ImageBackend::new()));
@@ -321,7 +338,14 @@ fn run_daemon(initial_wallpaper: Option<&str>) -> Result<()> {
     // Pass resources and clock into the conductor so it can handle OpenAndSwap
     // commands atomically (close old → open new, no parallel decode window).
     let runtime_resources = (*resources).clone();
-    runtime.run_with_commands(backend, sink, command_rx, runtime_resources, clock, Some(asset_path))?;
+    runtime.run_with_commands(
+        backend,
+        sink,
+        command_rx,
+        runtime_resources,
+        clock,
+        Some(asset_path),
+    )?;
 
     Ok(())
 }
@@ -349,30 +373,28 @@ fn start_ipc_server(
 
         info!("Nativis IPC server listening at {:?}", socket_path);
 
-        for stream in listener.incoming() {
-            if let Ok(mut stream) = stream {
-                let cmd_tx = command_tx.clone();
-                let res = resources.clone();
-                let cur_wp = current_wallpaper.clone();
-                let paused = is_paused.clone();
-                let plat = platform_paused.clone();
+        for mut stream in listener.incoming().flatten() {
+            let cmd_tx = command_tx.clone();
+            let res = resources.clone();
+            let cur_wp = current_wallpaper.clone();
+            let paused = is_paused.clone();
+            let plat = platform_paused.clone();
 
-                std::thread::spawn(move || {
-                    use std::io::{BufRead, BufReader, Write};
-                    let mut reader = BufReader::new(&stream);
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).is_ok() {
-                        if let Ok(cmd) = serde_json::from_str::<IpcCommand>(&line) {
-                            let resp = handle_ipc_command(cmd, &cmd_tx, &res, &cur_wp, &paused, &plat);
-                            if let Ok(resp_json) = serde_json::to_string(&resp) {
-                                let _ = stream.write_all(resp_json.as_bytes());
-                                let _ = stream.write_all(b"\n");
-                                let _ = stream.flush();
-                            }
+            std::thread::spawn(move || {
+                use std::io::{BufRead, BufReader, Write};
+                let mut reader = BufReader::new(&stream);
+                let mut line = String::new();
+                if reader.read_line(&mut line).is_ok() {
+                    if let Ok(cmd) = serde_json::from_str::<IpcCommand>(&line) {
+                        let resp = handle_ipc_command(cmd, &cmd_tx, &res, &cur_wp, &paused, &plat);
+                        if let Ok(resp_json) = serde_json::to_string(&resp) {
+                            let _ = stream.write_all(resp_json.as_bytes());
+                            let _ = stream.write_all(b"\n");
+                            let _ = stream.flush();
                         }
                     }
-                });
-            }
+                }
+            });
         }
     })
 }
@@ -386,17 +408,20 @@ fn start_ipc_server(
     platform_paused: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Write};
         use std::os::windows::ffi::OsStrExt;
         use std::os::windows::io::FromRawHandle;
-        use std::io::{BufRead, BufReader, Write};
-        use windows_sys::Win32::System::Pipes::*;
-        use windows_sys::Win32::Storage::FileSystem::*;
         use windows_sys::Win32::Foundation::*;
+        use windows_sys::Win32::Storage::FileSystem::*;
+        use windows_sys::Win32::System::Pipes::*;
 
         let pipe_path = get_socket_path();
         let wide_path: Vec<u16> = pipe_path.as_os_str().encode_wide().chain(Some(0)).collect();
 
-        info!("Nativis Windows IPC Named Pipe server listening at {:?}", pipe_path);
+        info!(
+            "Nativis Windows IPC Named Pipe server listening at {:?}",
+            pipe_path
+        );
 
         loop {
             let handle = unsafe {
@@ -413,7 +438,11 @@ fn start_ipc_server(
             };
 
             if handle == INVALID_HANDLE_VALUE {
-                error!("Failed to create Windows Named Pipe at {:?}: error code {}", pipe_path, unsafe { GetLastError() });
+                error!(
+                    "Failed to create Windows Named Pipe at {:?}: error code {}",
+                    pipe_path,
+                    unsafe { GetLastError() }
+                );
                 std::thread::sleep(std::time::Duration::from_millis(500));
                 continue;
             }
@@ -422,7 +451,9 @@ fn start_ipc_server(
             let connected = connect_res != 0 || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
 
             if !connected {
-                unsafe { CloseHandle(handle); }
+                unsafe {
+                    CloseHandle(handle);
+                }
                 continue;
             }
 
@@ -475,11 +506,22 @@ fn handle_ipc_command(
     platform_paused: &AtomicBool,
 ) -> IpcResponse {
     match cmd {
-        IpcCommand::SetWallpaper { uri, monitor, scaling } => {
-            info!("IPC request: SetWallpaper -> {} (monitor={:?}, scaling={:?})", uri, monitor, scaling);
+        IpcCommand::SetWallpaper {
+            uri,
+            monitor,
+            scaling,
+        } => {
+            info!(
+                "IPC request: SetWallpaper -> {} (monitor={:?}, scaling={:?})",
+                uri, monitor, scaling
+            );
             let asset_path = match AssetPath::parse(&uri) {
                 Ok(p) => p,
-                Err(e) => return IpcResponse::Error { message: format!("Invalid URI {}: {}", uri, e) },
+                Err(e) => {
+                    return IpcResponse::Error {
+                        message: format!("Invalid URI {}: {}", uri, e),
+                    }
+                }
             };
 
             // C3: Cheap probe first before touching or closing anything
@@ -505,7 +547,11 @@ fn handle_ipc_command(
             // atomically via OpenAndSwap, eliminating the parallel-decode race (K4).
             let backend = match plugin_manager.open(&asset_path) {
                 Some(b) => b,
-                None => return IpcResponse::Error { message: format!("No plugin found for {}", uri) },
+                None => {
+                    return IpcResponse::Error {
+                        message: format!("No plugin found for {}", uri),
+                    }
+                }
             };
 
             let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
@@ -514,7 +560,9 @@ fn handle_ipc_command(
                 source: asset_path,
                 reply: Some(reply_tx),
             }) {
-                return IpcResponse::Error { message: format!("Failed to dispatch command to runtime: {}", e) };
+                return IpcResponse::Error {
+                    message: format!("Failed to dispatch command to runtime: {}", e),
+                };
             }
 
             // C3: Await confirmation from conductor before updating state or config
@@ -534,44 +582,60 @@ fn handle_ipc_command(
                         Some(ref m) => format!("monitor {}", m),
                         None => "all outputs".to_string(),
                     };
-                    IpcResponse::Ok { message: format!("Wallpaper set to {} on {}", uri, target_desc) }
+                    IpcResponse::Ok {
+                        message: format!("Wallpaper set to {} on {}", uri, target_desc),
+                    }
                 }
-                Ok(Err(err)) => {
-                    IpcResponse::Error { message: format!("Failed to open wallpaper: {}", err) }
-                }
-                Err(_) => {
-                    IpcResponse::Error { message: "Timed out waiting for wallpaper backend to initialize".into() }
-                }
+                Ok(Err(err)) => IpcResponse::Error {
+                    message: format!("Failed to open wallpaper: {}", err),
+                },
+                Err(_) => IpcResponse::Error {
+                    message: "Timed out waiting for wallpaper backend to initialize".into(),
+                },
             }
         }
 
         IpcCommand::Pause => {
             is_paused.store(true, Ordering::SeqCst);
             let _ = command_tx.send(RuntimeCommand::SetPause(true));
-            IpcResponse::Ok { message: "Paused".into() }
+            IpcResponse::Ok {
+                message: "Paused".into(),
+            }
         }
         IpcCommand::Resume => {
             is_paused.store(false, Ordering::SeqCst);
             let _ = command_tx.send(RuntimeCommand::SetPause(false));
-            IpcResponse::Ok { message: "Resumed".into() }
+            IpcResponse::Ok {
+                message: "Resumed".into(),
+            }
         }
         IpcCommand::TogglePause => {
             let next = !is_paused.load(Ordering::SeqCst);
             is_paused.store(next, Ordering::SeqCst);
             let _ = command_tx.send(RuntimeCommand::SetPause(next));
-            IpcResponse::Ok { message: if next { "Paused".into() } else { "Resumed".into() } }
+            IpcResponse::Ok {
+                message: if next {
+                    "Paused".into()
+                } else {
+                    "Resumed".into()
+                },
+            }
         }
         IpcCommand::SetSpeed { speed } => {
             let mut cfg = UserConfig::load();
             cfg.playback_speed = speed;
             let _ = cfg.save();
-            IpcResponse::Ok { message: format!("Speed set to {}", speed) }
+            IpcResponse::Ok {
+                message: format!("Speed set to {}", speed),
+            }
         }
         IpcCommand::SetVolume { volume } => {
             let mut cfg = UserConfig::load();
             cfg.volume = volume;
             let _ = cfg.save();
-            IpcResponse::Ok { message: format!("Volume set to {}", volume) }
+            IpcResponse::Ok {
+                message: format!("Volume set to {}", volume),
+            }
         }
         IpcCommand::GetStatus => {
             let wp = current_wallpaper.read().clone();
@@ -579,7 +643,8 @@ fn handle_ipc_command(
             let cfg = UserConfig::load();
             IpcResponse::Status(EngineStatus {
                 is_running: true,
-                is_paused: is_paused.load(Ordering::SeqCst) || platform_paused.load(Ordering::SeqCst),
+                is_paused: is_paused.load(Ordering::SeqCst)
+                    || platform_paused.load(Ordering::SeqCst),
                 active_wallpaper: wp,
                 target_fps: cfg.target_fps,
                 playback_speed: cfg.playback_speed,
@@ -588,28 +653,24 @@ fn handle_ipc_command(
                 platform: env.desktop_environment,
             })
         }
-        IpcCommand::GetConfig => {
-            IpcResponse::Config(UserConfig::load())
-        }
+        IpcCommand::GetConfig => IpcResponse::Config(UserConfig::load()),
         IpcCommand::SaveConfig(new_cfg) => {
             let _ = new_cfg.save();
-            IpcResponse::Ok { message: "Config saved".into() }
+            IpcResponse::Ok {
+                message: "Config saved".into(),
+            }
         }
-        IpcCommand::ListWallpapers => {
-            IpcResponse::Wallpapers(vec![])
-        }
-        IpcCommand::ListPlugins => {
-            IpcResponse::Plugins(nativis_ipc::get_default_plugins())
-        }
-        IpcCommand::InstallPlugin { name } => {
-            IpcResponse::Ok { message: format!("Plugin '{}' installation requested", name) }
-        }
-        IpcCommand::GetEnvironment => {
-            IpcResponse::Environment(detect_environment())
-        }
+        IpcCommand::ListWallpapers => IpcResponse::Wallpapers(vec![]),
+        IpcCommand::ListPlugins => IpcResponse::Plugins(nativis_ipc::get_default_plugins()),
+        IpcCommand::InstallPlugin { name } => IpcResponse::Ok {
+            message: format!("Plugin '{}' installation requested", name),
+        },
+        IpcCommand::GetEnvironment => IpcResponse::Environment(detect_environment()),
         IpcCommand::Shutdown => {
             let _ = command_tx.send(RuntimeCommand::Stop);
-            IpcResponse::Ok { message: "Shutdown initiated".into() }
+            IpcResponse::Ok {
+                message: "Shutdown initiated".into(),
+            }
         }
     }
 }
@@ -619,7 +680,10 @@ fn handle_ipc_command(
 /// Running the heavy decoder (FFmpeg) in a worker process allows 100% of decoder
 /// memory (100–400 MB anon heap) to be immediately reclaimed by the OS upon exit.
 fn run_decode_worker(media_path: &str) -> Result<()> {
-    info!("Starting Nativis out-of-process decode worker for '{}'", media_path);
+    info!(
+        "Starting Nativis out-of-process decode worker for '{}'",
+        media_path
+    );
     let asset_path = AssetPath::parse(media_path)?;
     let mut plugin_manager = PluginManager::new();
     #[cfg(any(not(target_os = "windows"), feature = "video"))]
@@ -633,7 +697,10 @@ fn run_decode_worker(media_path: &str) -> Result<()> {
     let resources = Arc::new(ResourceManager::new());
     let clock = MediaClock::new();
     backend.open(&asset_path, &clock, &resources)?;
-    info!("Decode worker opened successfully for '{}'. Waiting on stdin for termination...", media_path);
+    info!(
+        "Decode worker opened successfully for '{}'. Waiting on stdin for termination...",
+        media_path
+    );
 
     use std::io::BufRead;
     let stdin = std::io::stdin();
@@ -650,4 +717,3 @@ fn run_decode_worker(media_path: &str) -> Result<()> {
     info!("Decode worker terminated cleanly.");
     Ok(())
 }
-
