@@ -268,7 +268,7 @@ fn configure_hardware_decoder(
         if let Some(gpu) = _gpu_device {
             let zero_copy_enabled = std::env::var("NATIVIS_D3D11_ZERO_COPY")
                 .map(|v| v != "0" && v.to_lowercase() != "false")
-                .unwrap_or(true);
+                .unwrap_or(false);
 
             if zero_copy_enabled && gpu.device_ptr != 0 {
                 let mut config_index = 0;
@@ -432,7 +432,11 @@ fn configure_hardware_decoder(
         DecodePreference::Hardware => {
             Err("no supported hardware decoder device is available".into())
         }
-        DecodePreference::Auto | DecodePreference::Software => Ok(None),
+        DecodePreference::Auto => {
+            info!("[NATIVIS DECODE] Falling back to CPU software decode (no supported hardware decode device context succeeded)");
+            Ok(None)
+        }
+        DecodePreference::Software => Ok(None),
     }
 }
 
