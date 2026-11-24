@@ -11,6 +11,7 @@
 #include <QSGGeometry>
 #include <QSGMaterial>
 #include <QSGMaterialShader>
+#include <QRunnable>
 #include <QtQuick/qsgtexture_platform.h>
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -79,6 +80,33 @@ void Nv12Shader::updateSampledImage(RenderState &, int binding, QSGTexture **tex
 // NativisItem
 // ───────────────────────────────────────────────────────────────────────────
 
+class TextureCleanupJob : public QRunnable
+{
+public:
+    TextureCleanupJob(GLuint yTex, GLuint uvTex, GLuint rgbaTex, QSGTexture* t1, QSGTexture* t2, QSGTexture* t3)
+        : m_y(yTex), m_uv(uvTex), m_rgba(rgbaTex), m_t1(t1), m_t2(t2), m_t3(t3) {}
+
+    void run() override {
+        QOpenGLContext *glCtx = QOpenGLContext::currentContext();
+        if (glCtx) {
+            QOpenGLFunctions *f = glCtx->functions();
+            if (m_y)    f->glDeleteTextures(1, &m_y);
+            if (m_uv)   f->glDeleteTextures(1, &m_uv);
+            if (m_rgba) f->glDeleteTextures(1, &m_rgba);
+        }
+        delete m_t1;
+        delete m_t2;
+        delete m_t3;
+    }
+private:
+    GLuint m_y = 0;
+    GLuint m_uv = 0;
+    GLuint m_rgba = 0;
+    QSGTexture *m_t1 = nullptr;
+    QSGTexture *m_t2 = nullptr;
+    QSGTexture *m_t3 = nullptr;
+};
+
 NativisItem::NativisItem(QQuickItem *parent)
     : QQuickItem(parent)
 {
@@ -90,29 +118,46 @@ NativisItem::NativisItem(QQuickItem *parent)
 NativisItem::~NativisItem()
 {
     if (m_watcherThread) {
-        m_watcherRunning.store(false, std::memory_order_relaxed);
+        m_watcherRunning.store(false, std::memory_order_seq_cst);
         if (m_runtimeCtx) {
             nativis_wake(m_runtimeCtx);
         }
-        m_watcherThread->wait();
+        while (m_watcherThread->isRunning()) {
+            if (m_watcherThread->wait(50)) {
+                break;
+            }
+            if (m_runtimeCtx) {
+                nativis_wake(m_runtimeCtx);
+            }
+        }
         delete m_watcherThread;
         m_watcherThread = nullptr;
     }
 
-    delete m_yQSG;
-    delete m_uvQSG;
-    delete m_rgbaQSG;
-
-    QOpenGLContext *glCtx = QOpenGLContext::currentContext();
-    if (glCtx) {
-        QOpenGLFunctions *f = glCtx->functions();
-        if (m_yTex)    f->glDeleteTextures(1, &m_yTex);
-        if (m_uvTex)   f->glDeleteTextures(1, &m_uvTex);
-        if (m_rgbaTex) f->glDeleteTextures(1, &m_rgbaTex);
+    QQuickWindow *win = window();
+    if (win && (m_yTex || m_uvTex || m_rgbaTex || m_yQSG || m_uvQSG || m_rgbaQSG)) {
+        win->scheduleRenderJob(
+            new TextureCleanupJob(m_yTex, m_uvTex, m_rgbaTex, m_yQSG, m_uvQSG, m_rgbaQSG),
+            QQuickWindow::BeforeSynchronizingStage
+        );
+    } else {
+        delete m_yQSG;
+        delete m_uvQSG;
+        delete m_rgbaQSG;
+        QOpenGLContext *glCtx = QOpenGLContext::currentContext();
+        if (glCtx) {
+            QOpenGLFunctions *f = glCtx->functions();
+            if (m_yTex)    f->glDeleteTextures(1, &m_yTex);
+            if (m_uvTex)   f->glDeleteTextures(1, &m_uvTex);
+            if (m_rgbaTex) f->glDeleteTextures(1, &m_rgbaTex);
+        }
     }
     m_yTex = 0;
     m_uvTex = 0;
     m_rgbaTex = 0;
+    m_yQSG = nullptr;
+    m_uvQSG = nullptr;
+    m_rgbaQSG = nullptr;
 
     if (m_runtimeCtx) {
         nativis_destroy(m_runtimeCtx);
@@ -124,11 +169,18 @@ void NativisItem::itemChange(ItemChange change, const ItemChangeData &value)
 {
     if (change == ItemSceneChange) {
         if (m_watcherThread) {
-            m_watcherRunning.store(false, std::memory_order_relaxed);
+            m_watcherRunning.store(false, std::memory_order_seq_cst);
             if (m_runtimeCtx) {
                 nativis_wake(m_runtimeCtx);
             }
-            m_watcherThread->wait();
+            while (m_watcherThread->isRunning()) {
+                if (m_watcherThread->wait(50)) {
+                    break;
+                }
+                if (m_runtimeCtx) {
+                    nativis_wake(m_runtimeCtx);
+                }
+            }
             delete m_watcherThread;
             m_watcherThread = nullptr;
         }
@@ -197,6 +249,7 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     // Preserve OpenGL texture binding state
     GLint prevTex = 0;
     f->glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
+    win->beginExternalCommands();
 
     // ── NV12 path (GPU hardware shader conversion) ─────────────────────────
     if (format == NATIVIS_FORMAT_NV12) {
@@ -311,8 +364,9 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         QSGGeometry::updateTexturedRectGeometry(geoNode->geometry(), rect, QRectF(0, 0, 1, 1));
         geoNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
 
-        // Restore OpenGL state
+        // Restore OpenGL state and reset scene graph state cache
         f->glBindTexture(GL_TEXTURE_2D, prevTex);
+        win->endExternalCommands();
 
         m_lastUploadedFrameId = currentFrameId;
 
@@ -397,8 +451,9 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
     }
     node->setRect(rect);
 
-    // Restore OpenGL state
+    // Restore OpenGL state and reset scene graph state cache
     f->glBindTexture(GL_TEXTURE_2D, prevTex);
+    win->endExternalCommands();
 
     m_lastUploadedFrameId = currentFrameId;
 

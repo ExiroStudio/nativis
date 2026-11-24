@@ -72,8 +72,14 @@ if [ -n "$QDBUS_BIN" ]; then
     echo "Querying KWin via $QDBUS_BIN..."
     # Query supportInformation (rate limited / summarized)
     $QDBUS_BIN org.kde.KWin /KWin org.kde.KWin.supportInformation 2>&1 | head -n 40 || echo "KWin D-Bus query returned non-zero"
+elif command -v busctl &>/dev/null; then
+    echo "Querying KWin via busctl..."
+    busctl --user call org.kde.KWin /KWin org.kde.KWin supportInformation 2>&1 | head -n 40 || echo "KWin D-Bus query returned non-zero"
+elif command -v gdbus &>/dev/null; then
+    echo "Querying KWin via gdbus..."
+    gdbus call --session --dest org.kde.KWin --object-path /KWin --method org.kde.KWin.supportInformation 2>&1 | head -n 40 || echo "KWin D-Bus query returned non-zero"
 else
-    echo "qdbus/qdbus6 not found; skipping KWin D-Bus query."
+    echo "qdbus/busctl/gdbus not found; skipping KWin D-Bus query."
 fi
 
 echo ""

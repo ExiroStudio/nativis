@@ -32,6 +32,7 @@ extern "C" {
 
 #define NATIVIS_FORMAT_RGBA8888 1
 #define NATIVIS_FORMAT_NV12     2
+#define NATIVIS_FORMAT_P010     3
 
 class QSGTexture;
 

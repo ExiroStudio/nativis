@@ -12,6 +12,7 @@
 #include <QSGGeometry>
 #include <QSGMaterial>
 #include <QSGMaterialShader>
+#include <QRunnable>
 
 // ───────────────────────────────────────────────────────────────────────────
 // Nv12Material + Nv12Shader — Fase 6
@@ -135,31 +136,62 @@ NativisItem::NativisItem(QQuickItem *parent)
     qDebug() << "Nativis Runtime Initialized. ABI Version:" << nativis_version();
 }
 
+class TextureCleanupJob : public QRunnable
+{
+public:
+    TextureCleanupJob(GLuint yTex, GLuint uvTex, QSGTexture* tex)
+        : m_y(yTex), m_uv(uvTex), m_tex(tex) {}
+
+    void run() override {
+        QOpenGLContext *glCtx = QOpenGLContext::currentContext();
+        if (glCtx) {
+            QOpenGLFunctions *f = glCtx->functions();
+            if (m_y)  f->glDeleteTextures(1, &m_y);
+            if (m_uv) f->glDeleteTextures(1, &m_uv);
+        }
+        delete m_tex;
+    }
+private:
+    GLuint m_y = 0;
+    GLuint m_uv = 0;
+    QSGTexture *m_tex = nullptr;
+};
+
 NativisItem::~NativisItem()
 {
     // Phase 1: stop watcher before destroying runtime context
     if (m_watcher) {
         m_watcher->stop();
-        m_watcher->wait();
+        while (m_watcher->isRunning()) {
+            if (m_watcher->wait(50)) {
+                break;
+            }
+            if (m_runtimeCtx) {
+                nativis_wake(m_runtimeCtx);
+            }
+        }
         delete m_watcher;
         m_watcher = nullptr;
     }
 
-    // Phase 2: persistent texture is owned by us (setOwnsTexture(false))
-    delete m_texture;
-    m_texture = nullptr;
-
-    // Fase 6: delete NV12 GL textures
-    if (m_yTex || m_uvTex) {
+    QQuickWindow *win = window();
+    if (win && (m_yTex || m_uvTex || m_texture)) {
+        win->scheduleRenderJob(
+            new TextureCleanupJob(m_yTex, m_uvTex, m_texture),
+            QQuickWindow::BeforeSynchronizingStage
+        );
+    } else {
+        delete m_texture;
         QOpenGLContext *glCtx = QOpenGLContext::currentContext();
         if (glCtx) {
             QOpenGLFunctions *f = glCtx->functions();
             if (m_yTex)  f->glDeleteTextures(1, &m_yTex);
             if (m_uvTex) f->glDeleteTextures(1, &m_uvTex);
         }
-        m_yTex = 0;
-        m_uvTex = 0;
     }
+    m_texture = nullptr;
+    m_yTex = 0;
+    m_uvTex = 0;
 
     if (m_runtimeCtx) {
         nativis_destroy(m_runtimeCtx);
@@ -173,7 +205,14 @@ void NativisItem::itemChange(ItemChange change, const ItemChangeData &value)
         // Phase 1: disconnect old watcher if window changes
         if (m_watcher) {
             m_watcher->stop();
-            m_watcher->wait();
+            while (m_watcher->isRunning()) {
+                if (m_watcher->wait(50)) {
+                    break;
+                }
+                if (m_runtimeCtx) {
+                    nativis_wake(m_runtimeCtx);
+                }
+            }
             delete m_watcher;
             m_watcher = nullptr;
         }

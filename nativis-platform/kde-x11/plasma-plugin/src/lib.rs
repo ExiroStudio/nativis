@@ -4,7 +4,7 @@ use nativis_protocol::{NativisAttachment, NativisFrameHeader, NATIVIS_ATTACHMENT
 use nativis_transport_shm::{ShmSurface, SurfaceOps};
 use std::os::raw::{c_int, c_void};
 use std::ptr;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[no_mangle]
@@ -24,6 +24,7 @@ pub struct NativisConsumer {
     fallback_buffer: Mutex<Vec<u8>>,
     width: AtomicUsize,
     height: AtomicUsize,
+    stopped: AtomicBool,
 }
 
 fn monotonic_ms() -> u64 {
@@ -37,13 +38,60 @@ fn monotonic_ms() -> u64 {
     (ts.tv_sec as u64) * 1000 + (ts.tv_nsec as u64) / 1_000_000
 }
 
+fn convert_nv12_to_rgba(
+    width: usize,
+    height: usize,
+    y_plane: &[u8],
+    y_stride: usize,
+    uv_plane: &[u8],
+    uv_stride: usize,
+    dst: &mut [u8],
+) {
+    for y in 0..height {
+        let y_row_start = y * y_stride;
+        let uv_row_start = (y / 2) * uv_stride;
+        let dst_row_start = y * width * 4;
+
+        if y_row_start + width > y_plane.len() || dst_row_start + width * 4 > dst.len() {
+            break;
+        }
+
+        let y_row = &y_plane[y_row_start..y_row_start + width];
+        let dst_row = &mut dst[dst_row_start..dst_row_start + width * 4];
+
+        for (x, &y_byte) in y_row.iter().enumerate().take(width) {
+            let y_val = y_byte as i32;
+            let uv_idx = uv_row_start + (x / 2) * 2;
+            if uv_idx + 1 >= uv_plane.len() {
+                break;
+            }
+            let u_val = uv_plane[uv_idx] as i32;
+            let v_val = uv_plane[uv_idx + 1] as i32;
+
+            let c = y_val - 16;
+            let d = u_val - 128;
+            let e = v_val - 128;
+
+            let r = ((298 * c + 409 * e + 128) >> 8).clamp(0, 255) as u8;
+            let g = ((298 * c - 100 * d - 208 * e + 128) >> 8).clamp(0, 255) as u8;
+            let b = ((298 * c + 516 * d + 128) >> 8).clamp(0, 255) as u8;
+
+            let out_idx = x * 4;
+            dst_row[out_idx] = r;
+            dst_row[out_idx + 1] = g;
+            dst_row[out_idx + 2] = b;
+            dst_row[out_idx + 3] = 255;
+        }
+    }
+}
+
 impl NativisConsumer {
     fn new() -> Self {
         Self::with_shm_name("/nativis_shm")
     }
 
     pub fn with_shm_name(name: &str) -> Self {
-        Self {
+        let consumer = Self {
             shm_name: name.to_string(),
             shm: Mutex::new(ShmSurface::new(name, 0, false).ok().map(Arc::new)),
             last_shm_attempt: AtomicU64::new(0),
@@ -51,19 +99,24 @@ impl NativisConsumer {
             fallback_buffer: Mutex::new(Vec::new()),
             width: AtomicUsize::new(0),
             height: AtomicUsize::new(0),
-        }
+            stopped: AtomicBool::new(false),
+        };
+        consumer.ensure_shm();
+        consumer
     }
 
     fn ensure_shm(&self) {
-        // Fast path: if SHM is already valid, skip entirely without syscalls.
-        if let Ok(guard) = self.shm.lock() {
-            if let Some(surface) = guard.as_ref() {
-                if let Ok(handle) = surface.acquire() {
-                    if handle.size >= std::mem::size_of::<NativisFrameHeader>() {
-                        let header = unsafe { &*(handle.ptr as *const NativisFrameHeader) };
-                        if header.magic == nativis_protocol::NATIVIS_MAGIC {
-                            return;
-                        }
+        let _ = self.get_shm();
+    }
+
+    fn get_shm(&self) -> Option<Arc<ShmSurface>> {
+        let mut guard = self.shm.lock().ok()?;
+        if let Some(surface) = guard.as_ref() {
+            if let Ok(handle) = surface.acquire() {
+                if handle.size >= std::mem::size_of::<NativisFrameHeader>() {
+                    let header = unsafe { &*(handle.ptr as *const NativisFrameHeader) };
+                    if header.magic == nativis_protocol::NATIVIS_MAGIC {
+                        return Some(surface.clone());
                     }
                 }
             }
@@ -73,30 +126,11 @@ impl NativisConsumer {
         // at most once every 100ms to avoid flooding shm_open syscalls.
         let now = monotonic_ms();
         let last = self.last_shm_attempt.load(Ordering::Relaxed);
-        if now.saturating_sub(last) < 100 {
-            return;
-        }
-        self.last_shm_attempt.store(now, Ordering::Relaxed);
-
-        if let Ok(mut guard) = self.shm.lock() {
-            // Re-check under the lock — another thread may have reconnected.
-            if let Some(surface) = guard.as_ref() {
-                if let Ok(handle) = surface.acquire() {
-                    if handle.size >= std::mem::size_of::<NativisFrameHeader>() {
-                        let header = unsafe { &*(handle.ptr as *const NativisFrameHeader) };
-                        if header.magic == nativis_protocol::NATIVIS_MAGIC {
-                            return;
-                        }
-                    }
-                }
-            }
+        if now.saturating_sub(last) >= 100 {
+            self.last_shm_attempt.store(now, Ordering::Relaxed);
             *guard = ShmSurface::new(&self.shm_name, 0, false).ok().map(Arc::new);
         }
-    }
-
-    fn get_shm(&self) -> Option<Arc<ShmSurface>> {
-        self.ensure_shm();
-        self.shm.lock().ok()?.as_ref().cloned()
+        guard.as_ref().cloned()
     }
 }
 
@@ -137,6 +171,7 @@ pub extern "C" fn nativis_begin_frame(ctx: *mut c_void, width: c_int, height: c_
     }
 
     let runtime = unsafe { &*(ctx as *const NativisConsumer) };
+    runtime.stopped.store(false, Ordering::SeqCst);
     runtime.width.store(width as usize, Ordering::Relaxed);
     runtime.height.store(height as usize, Ordering::Relaxed);
     runtime.ensure_shm();
@@ -167,6 +202,14 @@ pub extern "C" fn nativis_get_pixels(ctx: *mut c_void) -> *mut u8 {
                         std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
 
                         let mut candidate_ptr = ptr::null_mut();
+                        let mut is_nv12 = false;
+                        let mut nv12_y_offset = 0;
+                        let mut nv12_uv_offset = 0;
+                        let mut nv12_y_stride = 0;
+                        let mut nv12_uv_stride = 0;
+                        let mut frame_w = 0;
+                        let mut frame_h = 0;
+
                         let offset = header.attachment_offset as usize;
                         if handle.size
                             >= offset
@@ -183,19 +226,74 @@ pub extern "C" fn nativis_get_pixels(ctx: *mut c_void) -> *mut u8 {
                             };
                             for att in attachments {
                                 if att.usage == NATIVIS_ATTACHMENT_USAGE_COLOR {
-                                    candidate_ptr = unsafe { ptr.add(att.data_offset as usize) };
-                                    break;
+                                    if att.format == nativis_protocol::NATIVIS_FORMAT_NV12 {
+                                        is_nv12 = true;
+                                        if att.surface_index == 0 {
+                                            nv12_y_offset = att.data_offset as usize;
+                                            nv12_y_stride = att.stride as usize;
+                                            frame_w = att.width as usize;
+                                            frame_h = att.height as usize;
+                                        } else if att.surface_index == 1 {
+                                            nv12_uv_offset = att.data_offset as usize;
+                                            nv12_uv_stride = att.stride as usize;
+                                        }
+                                    } else {
+                                        candidate_ptr =
+                                            unsafe { ptr.add(att.data_offset as usize) };
+                                        break;
+                                    }
                                 }
                             }
                         }
 
                         std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
                         let seq2 = unsafe { std::ptr::read_volatile(&header.sequence) };
-                        if seq1 == seq2 && !candidate_ptr.is_null() {
-                            runtime
-                                .last_frame_id
-                                .store(header.frame_id, Ordering::Relaxed);
-                            return candidate_ptr;
+                        if seq1 == seq2 {
+                            if !candidate_ptr.is_null() {
+                                runtime
+                                    .last_frame_id
+                                    .store(header.frame_id, Ordering::Relaxed);
+                                return candidate_ptr;
+                            } else if is_nv12
+                                && nv12_y_offset != 0
+                                && nv12_uv_offset != 0
+                                && frame_w > 0
+                                && frame_h > 0
+                            {
+                                // Convert NV12 to RGBA in fallback_buffer so callers expecting RGBA pixels get valid data
+                                let expected_size = frame_w * frame_h * 4;
+                                let mut fallback = runtime.fallback_buffer.lock().unwrap();
+                                if fallback.len() != expected_size {
+                                    fallback.resize(expected_size, 0);
+                                }
+                                let y_plane = unsafe {
+                                    std::slice::from_raw_parts(
+                                        ptr.add(nv12_y_offset),
+                                        handle.size.saturating_sub(nv12_y_offset),
+                                    )
+                                };
+                                let uv_plane = unsafe {
+                                    std::slice::from_raw_parts(
+                                        ptr.add(nv12_uv_offset),
+                                        handle.size.saturating_sub(nv12_uv_offset),
+                                    )
+                                };
+                                convert_nv12_to_rgba(
+                                    frame_w,
+                                    frame_h,
+                                    y_plane,
+                                    nv12_y_stride,
+                                    uv_plane,
+                                    nv12_uv_stride,
+                                    &mut fallback,
+                                );
+                                runtime.width.store(frame_w, Ordering::Relaxed);
+                                runtime.height.store(frame_h, Ordering::Relaxed);
+                                runtime
+                                    .last_frame_id
+                                    .store(header.frame_id, Ordering::Relaxed);
+                                return fallback.as_mut_ptr();
+                            }
                         }
                     }
                 }
@@ -203,9 +301,9 @@ pub extern "C" fn nativis_get_pixels(ctx: *mut c_void) -> *mut u8 {
         }
     }
 
-    // Provide black fallback
-    let w = runtime.width.load(Ordering::Relaxed);
-    let h = runtime.height.load(Ordering::Relaxed);
+    // Provide fallback
+    let w = runtime.width.load(Ordering::Relaxed).max(1);
+    let h = runtime.height.load(Ordering::Relaxed).max(1);
     let expected_size = w * h * 4;
     let mut fallback = runtime.fallback_buffer.lock().unwrap();
     if fallback.len() != expected_size {
@@ -290,6 +388,9 @@ pub extern "C" fn nativis_wait_frame(ctx: *mut c_void, last_seen_id: u64, timeou
         return 0;
     }
     let runtime = unsafe { &*(ctx as *const NativisConsumer) };
+    if runtime.stopped.load(Ordering::SeqCst) {
+        return 0;
+    }
 
     let shm = match runtime.get_shm() {
         Some(s) => s,
@@ -321,6 +422,10 @@ pub extern "C" fn nativis_wait_frame(ctx: *mut c_void, last_seen_id: u64, timeou
     let current_id = header.frame_id;
     if current_id != last_seen_id && current_id != 0 {
         return current_id;
+    }
+
+    if runtime.stopped.load(Ordering::SeqCst) {
+        return 0;
     }
 
     #[cfg(target_os = "linux")]
@@ -363,13 +468,22 @@ pub extern "C" fn nativis_wake(ctx: *mut c_void) {
         return;
     }
     let runtime = unsafe { &*(ctx as *const NativisConsumer) };
+    runtime.stopped.store(true, Ordering::SeqCst);
     if let Some(shm) = runtime.get_shm() {
         if let Ok(handle) = shm.acquire() {
             #[cfg(target_os = "linux")]
             {
                 let futex_ptr = unsafe { handle.ptr.add(8) as *mut u32 };
                 unsafe {
-                    libc::syscall(libc::SYS_futex, futex_ptr, libc::FUTEX_WAKE, libc::INT_MAX);
+                    libc::syscall(
+                        libc::SYS_futex,
+                        futex_ptr,
+                        libc::FUTEX_WAKE,
+                        libc::INT_MAX,
+                        0,
+                        0,
+                        0,
+                    );
                 }
             }
         }
@@ -650,6 +764,104 @@ mod tests {
         nativis_wake(ctx);
 
         handle_a.join().unwrap();
+        nativis_destroy(ctx);
+    }
+
+    #[test]
+    fn test_nv12_to_rgba_conversion_in_get_pixels() {
+        let shm_name = "/nativis_shm_test_nv12_conv";
+        let size = 65536;
+        let surface = ShmSurface::new(shm_name, size, true).expect("create test SHM");
+        let handle = surface.acquire().expect("acquire handle");
+
+        let header_size = std::mem::size_of::<NativisFrameHeader>();
+        let att_size = std::mem::size_of::<NativisAttachment>();
+        let att_count = 2u32;
+        let data_start = header_size + (att_size * att_count as usize);
+
+        let w = 4u32;
+        let h = 4u32;
+        let y_len = (w * h) as usize;
+        let uv_len = (w * (h / 2)) as usize;
+
+        let y_offset = data_start as u32;
+        let uv_offset = y_offset + y_len as u32;
+
+        let header = NativisFrameHeader {
+            magic: nativis_protocol::NATIVIS_MAGIC,
+            version: nativis_protocol::NATIVIS_VERSION,
+            frame_id: 200,
+            timestamp: 2000,
+            sequence: 4,
+            attachment_count: att_count,
+            attachment_offset: header_size as u32,
+        };
+
+        let att_y = NativisAttachment {
+            usage: nativis_protocol::NATIVIS_ATTACHMENT_USAGE_COLOR,
+            format: nativis_protocol::NATIVIS_FORMAT_NV12,
+            width: w,
+            height: h,
+            stride: w,
+            planes: 2,
+            surface_index: 0,
+            data_offset: y_offset,
+        };
+
+        let att_uv = NativisAttachment {
+            usage: nativis_protocol::NATIVIS_ATTACHMENT_USAGE_COLOR,
+            format: nativis_protocol::NATIVIS_FORMAT_NV12,
+            width: w / 2,
+            height: h / 2,
+            stride: w,
+            planes: 2,
+            surface_index: 1,
+            data_offset: uv_offset,
+        };
+
+        unsafe {
+            // Write header
+            std::ptr::copy_nonoverlapping(
+                &header as *const _ as *const u8,
+                handle.ptr,
+                header_size,
+            );
+            // Write attachments
+            let att_ptr = handle.ptr.add(header_size) as *mut NativisAttachment;
+            std::ptr::write(att_ptr, att_y);
+            std::ptr::write(att_ptr.add(1), att_uv);
+
+            // Fill Y with 128, UV with 128 (neutral gray in YUV)
+            let y_slice = std::slice::from_raw_parts_mut(handle.ptr.add(y_offset as usize), y_len);
+            y_slice.fill(128);
+            let uv_slice =
+                std::slice::from_raw_parts_mut(handle.ptr.add(uv_offset as usize), uv_len);
+            uv_slice.fill(128);
+        }
+
+        let shm_c_str = std::ffi::CString::new(shm_name).unwrap();
+        let ctx = nativis_create_with_shm(shm_c_str.as_ptr());
+        assert!(!ctx.is_null());
+
+        let pixels = nativis_get_pixels(ctx);
+        assert!(!pixels.is_null());
+
+        let rgba_len = (w * h * 4) as usize;
+        let rgba_slice = unsafe { std::slice::from_raw_parts(pixels, rgba_len) };
+
+        // For Y=128, U=128, V=128:
+        // c = 128 - 16 = 112
+        // d = 0, e = 0
+        // r = g = b = (298 * 112 + 128) >> 8 = (33376 + 128) >> 8 = 33504 >> 8 = 130
+        // alpha = 255
+        for i in 0..(w * h) as usize {
+            let px = &rgba_slice[i * 4..(i + 1) * 4];
+            assert_eq!(px[0], 130, "R mismatch");
+            assert_eq!(px[1], 130, "G mismatch");
+            assert_eq!(px[2], 130, "B mismatch");
+            assert_eq!(px[3], 255, "Alpha mismatch");
+        }
+
         nativis_destroy(ctx);
     }
 }
