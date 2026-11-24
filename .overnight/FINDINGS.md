@@ -51,3 +51,27 @@ Format:
 - Verifikasi: Both `kde-wayland` builds with Qt6 `cmake`/`make` and `kde-x11` compiles.
 - Risiko perbaikan: None; standard OpenGL state hygiene.
 
+### F-006  [S2]  Multi-monitor FUTEX_WAKE only woke 1 thread in ShmSink::present
+- Lokasi: `nativis-core/transport-shm/src/lib.rs:422`
+- Bukti: TRACED — `libc::syscall(libc::SYS_futex, futex_ptr, libc::FUTEX_WAKE, 1i32, ...)` only woke 1 waiting consumer thread. On multi-monitor setups where each monitor has a separate Plasmashell wallpaper instance reading the shared surface, the second monitor was not woken, stalling until futex timeout (400ms-1000ms) and dropping to 1-2.5 FPS.
+- Dampak: Severe stuttering / frame drops on secondary monitors in multi-monitor setups.
+- Perbaikan: Commit 3377999 — Changed wake count from `1i32` to `libc::INT_MAX` so all connected wallpaper watchers receive frame presentation wakeups simultaneously.
+- Verifikasi: Verified in `cargo test -p nativis-transport-shm`.
+- Risiko perbaikan: None; standard POSIX futex broadcast pattern.
+
+### F-007  [S2]  Broken dead video feature in nativis-media referencing non-existent module
+- Lokasi: `nativis-core/media/Cargo.toml:19-24`, `nativis-core/media/src/lib.rs:17-20`
+- Bukti: PROVEN — Running `cargo check -p nativis-media --features video` failed with `error[E0583]: file not found for module video_source`. Also violated architectural decisions D1/D2 by embedding video decoder dependencies in core media.
+- Dampak: Broken crate features, bloat from `ffmpeg-next` in media crate dependency tree, violation of engine decoupling principles.
+- Perbaikan: Commit 3377999 — Removed dead `video` / `bundle-ffmpeg` features and unused `ffmpeg-next` dependency from `nativis-media/Cargo.toml` and `lib.rs`.
+- Verifikasi: `cargo check -p nativis-media --all-targets` succeeds cleanly.
+- Risiko perbaikan: None; video playback logic is housed entirely in `plugins/video_backend`.
+
+### F-008  [S3]  Silent fallback to CPU software decode when hardware context creation fails
+- Lokasi: `plugins/video_backend/src/lib.rs:435-439`
+- Bukti: DOC & TRACED — Under `DecodePreference::Auto`, if all hardware device initializations failed, the function returned `Ok(None)` silently without logging the reason or event, violating Decision D7 ("Silent fallbacks are bugs").
+- Dampak: Difficult troubleshooting in production when hardware decode fails or falls back to software.
+- Perbaikan: Commit ce48428 — Added explicit `info!` log explaining fallback to CPU software decode.
+- Verifikasi: Unit tests pass; verified log emission in test coverage.
+- Risiko perbaikan: None.
+

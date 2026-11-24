@@ -83,3 +83,18 @@ All technical statements must be labeled:
 - Qt5 X11 C++: UNVERIFIED at runtime due to lack of Qt5 dev headers in this environment, but syntax and signatures match Qt5 QSGMaterialShader documentation.
 - Created `scripts/collect-kde-env.sh` (E6) for owner desktop environment collection.
 
+### 4. P1 Audit & Fixes (Commit 3377999)
+- Multi-Monitor Wake: Changed `FUTEX_WAKE` in `nativis-core/transport-shm` from `1i32` to `libc::INT_MAX`. This ensures all wallpaper watchers across multi-monitor setups are woken concurrently upon frame presentation rather than starving secondary monitors down to 1-2 FPS.
+- Dead Broken Feature Removal: Removed dead `video` feature and unused `ffmpeg-next` from `nativis-core/media/Cargo.toml` and `lib.rs` (which caused compile failure with `--features video` due to missing `video_source.rs` module). Re-established strict adherence to D1/D2.
+- Clippy & Rustfmt Cleanliness: Resolved redundant closure in `nativis-core/media`, redundant generic borrows in `xtask`, `div_ceil` in `nativis-platform/wayland`, and incoming stream flattening in `src/main.rs`. All workspace crates now pass `cargo clippy --workspace --all-targets` with 0 warnings and `cargo fmt --check` cleanly.
+- Checkpoint: Created branch `checkpoint/p1`.
+
+### 5. P2 Performance & GPU Decode (Commit ce48428)
+- Windows D3D11VA Zero-Copy: Set default `NATIVIS_D3D11_ZERO_COPY` to `false` for safety as instructed, requiring explicit opt-in (`1` or `true`). Verified that when disabled or unavailable, fallback smoothly switches to independent device + CPU readback baseline.
+- Non-silent Fallback: Added explicit `info!` log on `DecodePreference::Auto` when falling back to software CPU decode, fulfilling Decision D7.
+- Linux VAAPI Parity: Runtime probe dynamically checks `/dev/dri/renderD*`. Feature `vaapi` remains opt-in in `plugins/video_backend/Cargo.toml` to prevent fragile dynamic DT_NEEDED link breaks on platforms lacking `libva.so.2`.
+- PlanarSlot Memory Reuse: Verified 3-slot ring buffer pool in `video_backend`. Memory never expands beyond 3 slots and steady-state operates at 100% hits with 0 heap allocations per decoded frame.
+- Static Image Baseline: Confirmed `image_backend` frees uncompressed `CpuBuffer` on tick 2, calls `malloc_trim(0)`, and enters `FrameStatus::Idle` (0 wakeups/s).
+- Full xtask bundle: Executed `cargo run -p xtask -- bundle-kde-wayland` assembling complete bundle at `platforms/kde-wayland`.
+- Checkpoint: Created branch `checkpoint/p2`.
+
