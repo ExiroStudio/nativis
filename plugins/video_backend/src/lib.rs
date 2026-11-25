@@ -363,9 +363,25 @@ fn configure_hardware_decoder(
 
                 #[cfg(target_os = "linux")]
                 if device_type == ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI {
-                    for render_node in &["/dev/dri/renderD128", "/dev/dri/renderD129"] {
-                        if std::path::Path::new(render_node).exists() {
-                            if let Ok(c_node) = std::ffi::CString::new(*render_node) {
+                    // Probe all /dev/dri/renderD* nodes in sorted order.
+                    // Hard-coding renderD128/129 misses systems with renderD127,
+                    // renderD130+, hybrid-GPU setups, or USB render nodes.
+                    let mut render_nodes: Vec<std::path::PathBuf> = std::fs::read_dir("/dev/dri")
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .map(|e| e.path())
+                        .filter(|p| {
+                            p.file_name()
+                                .and_then(|n| n.to_str())
+                                .map(|n| n.starts_with("renderD"))
+                                .unwrap_or(false)
+                        })
+                        .collect();
+                    render_nodes.sort();
+                    for render_node in &render_nodes {
+                        if let Some(node_str) = render_node.to_str() {
+                            if let Ok(c_node) = std::ffi::CString::new(node_str) {
                                 if ffi::av_hwdevice_ctx_create(
                                     &mut device,
                                     device_type,
@@ -376,13 +392,21 @@ fn configure_hardware_decoder(
                                 {
                                     info!(
                                         "[NATIVIS DECODE] Initialized VAAPI device context on {}",
-                                        render_node
+                                        node_str
                                     );
                                     created = true;
                                     break;
+                                } else {
+                                    debug!(
+                                        "[NATIVIS DECODE] VAAPI init failed on {}; trying next",
+                                        node_str
+                                    );
                                 }
                             }
                         }
+                    }
+                    if !created {
+                        debug!("[NATIVIS DECODE] No VAAPI render node succeeded; falling back to default av_hwdevice_ctx_create");
                     }
                 }
 
@@ -1205,8 +1229,16 @@ fn decoder_thread(
                 // Readback Architecture & Memory Model:
                 // - Copy #1: GPU VRAM -> host memory via av_hwframe_transfer_data.
                 // - Copy #2: FFmpeg AVFrame buffers -> 3-slot pre-allocated planar buffer pool (copy_from_slice).
-                //   Cannot be avoided without exposing FFmpeg-specific AVBufferRef / AVFrame across the
-                //   plugin ABI, which would violate DECISIONS.md D3 (POD, C-compatible ABI).
+                //   NOTE (R6b): The earlier comment claiming this copy "cannot be avoided without
+                //   exposing AVBufferRef/AVFrame across the plugin ABI (D3)" was INCORRECT. It is
+                //   possible to wrap a pool slot with av_buffer_create and pass it as the dst->buf[0]
+                //   to av_hwframe_transfer_data, letting the driver write directly into the pool —
+                //   all within this plugin, no FFmpeg types cross the ABI. That would eliminate Copy #2.
+                //   The current copy_from_slice approach is kept for simplicity and because
+                //   av_hwframe_transfer_data layout guarantees vary by driver (planar vs semi-planar
+                //   strides differ across VAAPI drivers). The copy also allows pool slots to use a
+                //   canonical stride (width, no padding), which the sink and consumer both expect.
+                //   If profiling shows Copy #2 is a bottleneck, revisit with av_buffer_create wrapping.
                 // - Pool Hit Guarantees: With crossbeam bounded(1) queue, at most 1 frame waits in channel,
                 //   1 frame is held by the renderer/sink, and 1 frame is being populated by decoder.
                 //   With 3 slots in the ring, slot recycling always observes strong_count == 1 after warmup,
