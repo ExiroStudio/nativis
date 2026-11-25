@@ -3196,6 +3196,7 @@ name = "nativis-v1-core"
 version = "1.0.0"
 dependencies = [
  "libc",
+ "nativis-core",
  "nativis-protocol",
  "nativis-transport-shm",
 ]
@@ -3205,6 +3206,7 @@ name = "nativis-v2-core"
 version = "1.0.0"
 dependencies = [
  "libc",
+ "nativis-core",
  "nativis-protocol",
  "nativis-transport-shm",
 ]
