@@ -112,7 +112,11 @@ NativisItem::NativisItem(QQuickItem *parent)
 {
     setFlag(ItemHasContents, true);
     m_runtimeCtx = nativis_create();
-    qDebug() << "Nativis Wayland Runtime Initialized. ABI Version:" << nativis_version();
+    const uint32_t abiVer = nativis_version();
+    qDebug() << "Nativis Wayland Runtime Initialized. ABI Version:" << abiVer;
+    if (abiVer != NATIVIS_PROTOCOL_VERSION) {
+        qWarning() << "Nativis ABI version mismatch! Expected" << NATIVIS_PROTOCOL_VERSION << "got" << abiVer;
+    }
 }
 
 NativisItem::~NativisItem()
@@ -222,9 +226,15 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         return oldNode;
     }
 
+    struct NativisFrameGuard {
+        void *ctx;
+        ~NativisFrameGuard() {
+            if (ctx) nativis_end_frame(ctx);
+        }
+    } frameGuard{m_runtimeCtx};
+
     uint64_t currentFrameId = nativis_get_frame_id(m_runtimeCtx);
     if (currentFrameId == m_lastUploadedFrameId && oldNode != nullptr) {
-        nativis_end_frame(m_runtimeCtx);
         return oldNode;
     }
 
@@ -235,13 +245,11 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
 
     QQuickWindow *win = window();
     if (!win) {
-        nativis_end_frame(m_runtimeCtx);
         return oldNode;
     }
 
     QOpenGLContext *glCtx = QOpenGLContext::currentContext();
     if (!glCtx) {
-        nativis_end_frame(m_runtimeCtx);
         return oldNode;
     }
     QOpenGLFunctions *f = glCtx->functions();
@@ -260,7 +268,6 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         uint8_t* uvData = nativis_get_plane(m_runtimeCtx, 1, &uvStride, &uvW, &uvH);
 
         nativis_render(m_runtimeCtx);
-        nativis_end_frame(m_runtimeCtx);
 
         if (!yData || !uvData || yW == 0 || yH == 0) {
             f->glBindTexture(GL_TEXTURE_2D, prevTex);
@@ -394,7 +401,6 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
 
     uint8_t* pixels = nativis_get_pixels(m_runtimeCtx);
     nativis_render(m_runtimeCtx);
-    nativis_end_frame(m_runtimeCtx);
 
     int realW = nativis_get_width(m_runtimeCtx);
     int realH = nativis_get_height(m_runtimeCtx);

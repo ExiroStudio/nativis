@@ -30,9 +30,10 @@ extern "C" {
                                uint32_t* out_stride, uint32_t* out_width, uint32_t* out_height);
 }
 
-#define NATIVIS_FORMAT_RGBA8888 1
-#define NATIVIS_FORMAT_NV12     2
-#define NATIVIS_FORMAT_P010     3
+#define NATIVIS_PROTOCOL_VERSION 4
+#define NATIVIS_FORMAT_RGBA8888  1
+#define NATIVIS_FORMAT_NV12      2
+#define NATIVIS_FORMAT_P010      3
 
 class QSGTexture;
 

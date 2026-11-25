@@ -133,7 +133,11 @@ NativisItem::NativisItem(QQuickItem *parent)
 {
     setFlag(ItemHasContents, true);
     m_runtimeCtx = nativis_create();
-    qDebug() << "Nativis Runtime Initialized. ABI Version:" << nativis_version();
+    const uint32_t abiVer = nativis_version();
+    qDebug() << "Nativis Runtime Initialized. ABI Version:" << abiVer;
+    if (abiVer != NATIVIS_PROTOCOL_VERSION) {
+        qWarning() << "Nativis ABI version mismatch! Expected" << NATIVIS_PROTOCOL_VERSION << "got" << abiVer;
+    }
 }
 
 class TextureCleanupJob : public QRunnable
@@ -252,12 +256,18 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         return oldNode; // runtime not ready yet
     }
 
+    struct NativisFrameGuard {
+        void *ctx;
+        ~NativisFrameGuard() {
+            if (ctx) nativis_end_frame(ctx);
+        }
+    } frameGuard{m_runtimeCtx};
+
     // ── Fase 7: Frame-id gating ────────────────────────────────────────────
     // Don't re-upload textures if the frame hasn't changed.
     // This prevents redundant glTexSubImage2D calls that waste GPU bandwidth.
     uint64_t currentFrameId = nativis_get_frame_id(m_runtimeCtx);
     if (currentFrameId == m_lastUploadedFrameId && oldNode != nullptr) {
-        nativis_end_frame(m_runtimeCtx);
         return oldNode; // no new frame — skip upload
     }
     // NOTE: m_lastUploadedFrameId is intentionally NOT updated here anymore.
@@ -289,7 +299,6 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
         uint8_t* uvData = nativis_get_plane(m_runtimeCtx, 1, &uvStride, &uvW, &uvH);
 
         nativis_render(m_runtimeCtx);
-        nativis_end_frame(m_runtimeCtx);
 
         if (!yData || !uvData || yW == 0 || yH == 0) {
             qDebug() << "[nativis-debug] updatePaintNode: plane data not ready, frameId=" << currentFrameId
@@ -457,7 +466,6 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
 
     uint8_t* pixels = nativis_get_pixels(m_runtimeCtx);
     nativis_render(m_runtimeCtx);
-    nativis_end_frame(m_runtimeCtx);
 
     int realW = nativis_get_width(m_runtimeCtx);
     int realH = nativis_get_height(m_runtimeCtx);
