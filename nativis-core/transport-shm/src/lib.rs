@@ -16,6 +16,7 @@ pub trait SurfaceOps {
 pub struct ShmSurface {
     fd: c_int,
     size: usize,
+    ino: u64,
     ptr: *mut c_void,
     unlink_name: Option<CString>,
 }
@@ -49,6 +50,10 @@ impl ShmSurface {
 
         let mut actual_size = size;
         if create {
+            if size == 0 {
+                unsafe { libc::close(fd) };
+                return Err("SHM create size cannot be 0".to_string());
+            }
             let res = unsafe { libc::ftruncate(fd, size as libc::off_t) };
             if res < 0 {
                 unsafe { libc::close(fd) };
@@ -57,19 +62,21 @@ impl ShmSurface {
                     std::io::Error::last_os_error()
                 ));
             }
-        } else {
-            // Retrieve size from fstat if we are just opening it
-            let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-            if unsafe { libc::fstat(fd, &mut stat) } < 0 {
-                unsafe { libc::close(fd) };
-                return Err(format!("fstat failed: {}", std::io::Error::last_os_error()));
-            }
+        }
+
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstat(fd, &mut stat) } < 0 {
+            unsafe { libc::close(fd) };
+            return Err(format!("fstat failed: {}", std::io::Error::last_os_error()));
+        }
+        if !create {
             actual_size = stat.st_size as usize;
             if actual_size == 0 {
                 unsafe { libc::close(fd) };
                 return Err("SHM size is 0".to_string());
             }
         }
+        let ino = stat.st_ino;
 
         let ptr = unsafe {
             libc::mmap(
@@ -91,9 +98,54 @@ impl ShmSurface {
         Ok(Self {
             fd,
             size: actual_size,
+            ino,
             ptr,
             unlink_name,
         })
+    }
+
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
+    pub fn inode(&self) -> u64 {
+        self.ino
+    }
+
+    /// Resizes the backing SHM object in place without unlinking its name from `/dev/shm`.
+    pub fn resize(&mut self, new_size: usize) -> Result<(), String> {
+        if new_size == 0 {
+            return Err("SHM size cannot be 0".to_string());
+        }
+        if new_size == self.size {
+            return Ok(());
+        }
+        let res = unsafe { libc::ftruncate(self.fd, new_size as libc::off_t) };
+        if res < 0 {
+            return Err(format!(
+                "ftruncate failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let new_ptr = unsafe {
+            libc::mmap(
+                ptr::null_mut(),
+                new_size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                self.fd,
+                0,
+            )
+        };
+        if new_ptr == libc::MAP_FAILED {
+            return Err(format!("mmap failed: {}", std::io::Error::last_os_error()));
+        }
+        unsafe {
+            libc::munmap(self.ptr, self.size);
+        }
+        self.ptr = new_ptr;
+        self.size = new_size;
+        Ok(())
     }
 
     pub fn is_valid(&self) -> bool {
@@ -101,7 +153,7 @@ impl ShmSurface {
         if unsafe { libc::fstat(self.fd, &mut stat) } < 0 {
             return false;
         }
-        stat.st_nlink > 0 && stat.st_size as usize == self.size
+        stat.st_nlink > 0 && stat.st_size as usize == self.size && stat.st_ino == self.ino
     }
 }
 
@@ -143,11 +195,29 @@ use nativis_protocol::{
 /// Maximum allowable SHM buffer size (128 MB, sufficient for 8K NV12 or 4K/5K RGBA).
 pub const MAX_SHM_SIZE: usize = 128 * 1024 * 1024;
 
+static NEXT_EPOCH_SEED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn new_session_epoch() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let seq = NEXT_EPOCH_SEED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let pid = std::process::id() as u64;
+    let token = nanos ^ pid.rotate_left(32) ^ seq.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    if token == 0 {
+        1
+    } else {
+        token
+    }
+}
+
 pub struct ShmSink {
     name: String,
     surface: ShmSurface,
     resources: ResourceManager,
     frame_count: u64,
+    epoch: u64,
     submitted_frames: u64,
     total_submit_us: u64,
     window_start: Instant,
@@ -159,6 +229,13 @@ const METRICS_INTERVAL: u64 = 300;
 impl ShmSink {
     pub fn new(name: &str, size: usize, resources: ResourceManager) -> Result<Self, String> {
         let surface = ShmSurface::new(name, size, true)?;
+        // Clear any leftover header bytes if reusing an un-unlinked SHM object after a crash.
+        let header_size = std::mem::size_of::<NativisFrameHeader>();
+        if surface.size >= header_size {
+            unsafe {
+                ptr::write_bytes(surface.ptr as *mut u8, 0, header_size);
+            }
+        }
         // frame_count starts at 1, not 0.
         //
         // frame_id = 0 is reserved as the "no frame / backend not ready" sentinel.
@@ -172,6 +249,7 @@ impl ShmSink {
             surface,
             resources,
             frame_count: 1,
+            epoch: new_session_epoch(),
             submitted_frames: 0,
             total_submit_us: 0,
             window_start: Instant::now(),
@@ -231,14 +309,18 @@ impl FrameSink for ShmSink {
                     )));
                 }
                 tracing::info!(
-                    "[SHM] Re-creating SHM region '{}' from {} to {} bytes for larger frame",
+                    "[SHM] Resizing SHM region '{}' in place from {} to {} bytes for larger frame",
                     self.name,
                     self.surface.size,
                     needed
                 );
-                self.surface = ShmSurface::new(&self.name, needed, true).map_err(|e| {
-                    MediaError::GpuUpload(format!("Failed to re-create SHM region: {}", e))
+                self.surface.resize(needed).map_err(|e| {
+                    MediaError::GpuUpload(format!("Failed to resize SHM region: {}", e))
                 })?;
+                self.epoch = self.epoch.wrapping_add(1);
+                if self.epoch == 0 {
+                    self.epoch = 1;
+                }
                 self.truncated_warned = false;
             }
         }
@@ -283,11 +365,11 @@ impl FrameSink for ShmSink {
                     cursor += plane.stride * ph;
                 }
 
-                // ── Urutan penulisan (Fase 8 safety & Seqlock v3) ──
+                // ── Urutan penulisan (Fase 8 safety & Seqlock v4) ──
                 // 1. Tulis sequence ganjil (odd = write in progress) via seqlock
                 // 2. Tulis SEMUA data pixel dulu (kedua plane)
                 // 3. Tulis attachment array
-                // 4. Tulis header (frame_id & sequence genap / even = write complete) PALING TERAKHIR
+                // 4. Tulis header (frame_id, shm_size, epoch & sequence genap) PALING TERAKHIR
                 unsafe {
                     let ptr = handle.ptr;
 
@@ -328,6 +410,8 @@ impl FrameSink for ShmSink {
                         sequence: even_seq,
                         attachment_count: att_count,
                         attachment_offset: header_size as u32,
+                        shm_size: handle.size as u64,
+                        epoch: self.epoch,
                     };
                     std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
                     std::ptr::copy_nonoverlapping(
@@ -356,6 +440,8 @@ impl FrameSink for ShmSink {
                     sequence: even_seq,
                     attachment_count: 1,
                     attachment_offset: header_size as u32,
+                    shm_size: handle.size as u64,
+                    epoch: self.epoch,
                 };
 
                 let attachment = NativisAttachment {
@@ -641,5 +727,41 @@ mod tests {
             "Submit must reject frame exceeding MAX_SHM_SIZE without silent truncation"
         );
         resources.free(handle);
+    }
+
+    #[test]
+    fn test_resize_preserves_shm_name_for_consumer_reopen() {
+        let shm_name = format!("/nativis_test_resize_reopen_{}", std::process::id());
+        let initial_size = 4096;
+        let resources = ResourceManager::new();
+        let mut sink = ShmSink::new(&shm_name, initial_size, resources.clone())
+            .expect("Failed to create ShmSink");
+
+        // Consumer opens SHM before resize
+        let initial_consumer =
+            ShmSurface::new(&shm_name, 0, false).expect("Initial consumer open failed");
+        assert_eq!(initial_consumer.size, initial_size);
+
+        // Producer submits a larger frame triggering resize
+        let cpu_buf = CpuBuffer {
+            width: 64,
+            height: 64,
+            data: vec![0xCD; 64 * 64 * 4],
+        };
+        let handle = resources.register(Box::new(cpu_buf));
+        let frame = Frame::new(handle, 64, 64, std::time::Duration::from_millis(16), true);
+        sink.submit(frame).expect("resize submit should succeed");
+        resources.free(handle);
+
+        // A consumer opening/re-opening AFTER resize must still find the SHM name in /dev/shm
+        let reopened = ShmSurface::new(&shm_name, 0, false)
+            .expect("Consumer must be able to reopen SHM after producer resize");
+        assert!(reopened.size >= 64 * 64 * 4 + std::mem::size_of::<NativisFrameHeader>());
+        assert!(reopened.is_valid());
+        assert!(!initial_consumer.is_valid(), "Initial consumer size is smaller than resized SHM");
+
+        drop(sink);
+        assert!(!reopened.is_valid(), "Dropping ShmSink must unlink SHM (st_nlink == 0)");
+        assert!(ShmSurface::new(&shm_name, 0, false).is_err(), "SHM name must be unlinked on sink drop");
     }
 }

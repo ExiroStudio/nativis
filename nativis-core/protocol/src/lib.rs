@@ -1,7 +1,7 @@
 #![no_std]
 
 pub const NATIVIS_MAGIC: u32 = 0x4954414E; // 'NATI' in little-endian ASCII (N=0x4E, A=0x41, T=0x54, I=0x49) Wait, N is 0x4E, A is 0x41, T is 0x54, I is 0x49. So 0x4954414E.
-pub const NATIVIS_VERSION: u32 = 3;
+pub const NATIVIS_VERSION: u32 = 4;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,6 +13,8 @@ pub struct NativisFrameHeader {
     pub sequence: u64, // Seqlock counter: odd = write in progress, even = write complete
     pub attachment_count: u32,
     pub attachment_offset: u32, // Offset in bytes from the start of the header to the array of NativisAttachment
+    pub shm_size: u64,          // Total size in bytes of the backing SHM object (v4)
+    pub epoch: u64,             // Producer session/resize epoch, bumped on start & resize (v4)
 }
 
 pub const NATIVIS_ATTACHMENT_USAGE_COLOR: u32 = 1;
