@@ -108,3 +108,142 @@ Format:
 - Risiko perbaikan: None.
 
 
+
+### F-013  [S1]  ShmSink resize unlinks SHM name, breaking consumers that reopen after resize
+- Lokasi: `nativis-core/transport-shm/src/lib.rs:239` (overnight/2026-11-23 HEAD 012a3ab)
+- Bukti: TRACED — `self.surface = ShmSurface::new(&self.name, needed, true)` evaluated RHS
+  first (creates new surface), then dropped LHS (old surface), which called `shm_unlink(name)`
+  via `Drop for ShmSurface` (`:114-115`). Name `/nativis_shm` disappeared from `/dev/shm`
+  while the new object remained mapped in the producer. Any consumer calling `shm_open` after
+  the unlink got ENOENT. Consumers already holding the mapping saw header epoch/shm_size
+  mismatch on next frame but had no mechanism to reconnect.
+- Dampak: Wallpaper never appears after first video resolution change or daemon restart.
+  On hybrid GPU / multi-resolution setups where resolution negotiation triggers resize,
+  this was essentially always triggered. Consumer with stale mapping + new header layout
+  could also read OOB (SIGSEGV in plasmashell, see A.0 nativis_get_plane claim).
+- Perbaikan: Commit 1661d03 — `ShmSurface::resize(&mut self, new_size)` uses
+  `ftruncate + mremap` in-place. SHM name remains in `/dev/shm` throughout. Protocol
+  bumped to v4 — header gains `shm_size: u64` and `epoch: u64`. Consumer uses `shm_size`
+  to detect resize without fstat; `epoch` to detect daemon restart.
+- Verifikasi: PROVEN — `test_resize_preserves_shm_name_for_consumer_reopen` passes;
+  all 4 transport-shm tests pass; all 7 v1-core + v2-core consumer tests pass.
+- Risiko perbaikan: mremap may not be available on non-Linux (guarded by #[cfg(target_os="linux")]);
+  Windows path unchanged. ftruncate shrink on a mapped region is POSIX-safe (old pages remain
+  mapped until munmap; new header size in shm_size field guards consumer bounds check).
+
+### F-014  [S1]  nativis_get_plane OOB — no bounds check, no pin during GL upload
+- Lokasi: `nativis-platform/kde-x11/plasma-plugin/src/lib.rs:~559-590`,
+  `nativis-platform/kde-wayland/plasma-plugin/src/lib.rs:~559-590` (overnight HEAD 012a3ab)
+- Bukti: TRACED — `nativis_get_plane` returned `base_ptr.add(att.data_offset as usize)` without
+  checking `data_offset + stride * height <= shm_size`. With a stale (smaller) mapping + new
+  larger header layout, `data_offset` from the new header exceeded the mapping → SIGSEGV in
+  plasmashell GL upload. Additionally, no `Arc<ShmSurface>` was pinned until `nativis_end_frame`,
+  so a concurrent producer resize + mremap could unmap memory the GL driver was reading.
+- Dampak: Potential SIGSEGV in plasmashell render thread on first frame after resize.
+  Race window for use-after-free if resize happened between `nativis_get_plane` and GL upload.
+- Perbaikan: Commit 233fd4a — `attachment_plane_range()` validates stride >= min_row_bytes,
+  `data_offset >= sizeof(Header)`, `end <= shm_size`. Returns null on any violation (logged).
+  `begin_frame()` pins `Arc<ShmSurface>` clone in `pinned_shm`; `active_shm()` returns pinned
+  ref. C++ `NativisFrameGuard` RAII calls `nativis_end_frame()` on scope exit (all paths).
+- Verifikasi: PROVEN — `test_r1_oob_attachment_rejected` asserts null returned;
+  `test_r1_pinned_shm_survives_concurrent_resize_until_end_frame` passes. 7/7 each crate.
+- Risiko perbaikan: None; null return causes plasmashell to skip upload (black frame, not crash).
+
+### F-015  [S1]  Consumer never detects resize: stale mapping + new header → OOB reads
+- Lokasi: `nativis-platform/kde-x11/plasma-plugin/src/lib.rs:108-128`,
+  `nativis-platform/kde-wayland/plasma-plugin/src/lib.rs:108-128` (overnight HEAD 012a3ab)
+- Bukti: TRACED — `get_shm()` returned old surface as long as `magic` was valid. `is_valid()`
+  checked only `st_size == self.size` (not `epoch`, not `shm_size`). After F-013 fix (resize
+  in-place), `st_size` changes but consumer has no mechanism to notice without an fstat.
+  F-004 (prior fix) throttled fstat to 250ms, so for 250ms after resize, consumer used stale
+  (smaller) mapping with new header claiming larger `data_offset` values → OOB access.
+- Dampak: 250ms window of guaranteed OOB reads / possible SIGSEGV after every resize.
+- Perbaikan: Commit 233fd4a — `get_shm()` reads `shm_size` and `epoch` from header
+  (in-memory, no syscall). `shm_size` mismatch → immediate reopen bypassing 250ms throttle.
+  `epoch` change → one fstat to verify liveness, then accept. Throttle only applies to
+  steady-state same-epoch same-size frames.
+- Verifikasi: PROVEN — `test_r1_resize_and_daemon_restart_reconnect` asserts immediate reopen
+  on epoch change; `test_r1_same_size_frames_do_not_trigger_per_call_fstat` asserts <= 2 fstat
+  across 200 same-size frames. All 7 tests pass.
+- Risiko perbaikan: None; in-memory header read is safe (magic check still guards unmapped memory).
+
+### F-016  [S1]  Protocol version not propagated: consumers returned hardcoded v3
+- Lokasi: `nativis-platform/kde-wayland/plasma-plugin/src/lib.rs` (nativis_version fn, overnight HEAD)
+- Bukti: TRACED — `nativis_version()` returned a hardcoded literal `3` rather than
+  `nativis_protocol::NATIVIS_VERSION`. Protocol was bumped to 4 (shm_size + epoch fields)
+  but consumer would advertise v3 to QML caller → version mismatch check in C++ would
+  incorrectly warn on v3-aware plugins, or miss the check entirely.
+- Dampak: QML version guard (C++ `nativis_version() != NATIVIS_PROTOCOL_VERSION`) would
+  emit spurious warnings or silently run mismatched versions.
+- Perbaikan: Commit 233fd4a — `nativis_version()` now returns
+  `nativis_protocol::NATIVIS_VERSION` (the crate constant, currently 4).
+  C++ headers updated: `#define NATIVIS_PROTOCOL_VERSION 4`.
+  One-time `qWarning()` on mismatch guarded by `version_warned: AtomicBool`.
+- Verifikasi: TRACED — grep in both plasma-plugin/src/lib.rs. No unit test for version
+  export (C FFI); UNVERIFIED at runtime until C++ plugin rebuilt.
+- Risiko perbaikan: None.
+
+### F-017  [S2]  VAAPI device probe hard-coded to renderD128/renderD129
+- Lokasi: `plugins/video_backend/src/lib.rs:366` (overnight HEAD 012a3ab)
+- Bukti: TRACED — `for render_node in &["/dev/dri/renderD128", "/dev/dri/renderD129"]`.
+  On hybrid GPU systems (Intel + NVIDIA, owner's machine), render nodes may be renderD127
+  (Intel) or renderD128+renderD129 (NVIDIA). On multi-GPU servers, D130+ is common.
+  USB render adapters use arbitrary renderD numbers.
+- Dampak: VAAPI init silently skips any render node not in {D128, D129}; falls back to
+  default av_hwdevice_ctx_create (which uses whatever the driver chooses, may differ from
+  desired GPU). No log of which nodes were skipped. D7 violation (silent fallback).
+- Perbaikan: Commit 38fca3b — Replaced hard-coded list with `std::fs::read_dir("/dev/dri")`
+  sorted glob, trying all `renderD*` entries. Each failed attempt logged at debug level.
+  Missing `/dev/dri` directory is handled gracefully (empty iterator).
+- Verifikasi: TRACED — compiles cleanly (`cargo check -p nativis-plugin-video`).
+  Runtime test requires physical DRI device; UNVERIFIED on CI (no /dev/dri in ubuntu-latest).
+- Risiko perbaikan: Sorted order means D128 is still tried before D129 on typical systems.
+  First successful init wins. No behavioral regression on single-GPU systems.
+
+### F-018  [S2]  Stale compiled .so binaries tracked in git causing stale-binary mismatch
+- Lokasi: `platforms/kde-wayland/contents/ui/{libnativis_v2_core.so,libnativisplugin.so}`,
+  `platforms/kde-x11/contents/ui/{libnativis_v1_core.so,libnativisplugin.so}`
+- Bukti: PROVEN — `git ls-files | grep \.so$` returned 4 entries. `ls -la` showed
+  libnativis_v1_core.so dated Nov 24 21:59 (overnight build) vs libnativisplugin.so Nov 7
+  13:50 (original). Binaries in tree were different vintages; ~/.local/share/plasma/...
+  installed Nov 23 20:14 (yet another vintage). Three different binary sets in play.
+- Dampak: `git diff` showed .so changes in diffstat, misleading reviewers. Binary mismatch
+  between plugin .so and qml plugin meant C FFI version expectations diverged. Overnight
+  fixes compiled into new .so never propagated to installed binary.
+- Perbaikan: Commit 0c9c844 — `git rm --cached` for all 4 .so files. `*.so` added to
+  `.gitignore`. Binaries must be rebuilt via `cargo xtask bundle-all` and installed manually.
+- Verifikasi: PROVEN — `git ls-files | grep \.so$` returns empty after commit.
+- Risiko perbaikan: First-time contributors must run xtask to get working binaries;
+  README/INSTALL should document this.
+
+### F-019  [S3]  CI FFmpeg Windows build unpinned (moving 'latest' tag, no SHA-256 check)
+- Lokasi: `.github/workflows/ci.yml:78`
+- Bukti: TRACED — URL used `releases/download/latest/...`. 'latest' resolves to whatever is
+  current on the day of the CI run — supply-chain drift risk and reproducibility failure.
+  No SHA-256 verification after download.
+- Dampak: FFmpeg ABI change → silent CI breakage on Windows without code change.
+  Malicious/compromised upstream release undetectable. CI non-reproducible across runs.
+- Perbaikan: Commit 1ef401e — Pinned to tag `autobuild-2024-11-07-12-56`. SHA-256 check
+  block added (enforced once placeholder is replaced with real hash from first CI run).
+  Added `fix/**` branch trigger. Added separate `lint` job: `cargo fmt --check` +
+  `cargo clippy --workspace --all-targets -- -D warnings`.
+- Verifikasi: TRACED — `.github/workflows/ci.yml` reviewed. UNVERIFIED: real CI run.
+- Risiko perbaikan: SHA placeholder means SHA check is advisory until an operator fills
+  it in. Clippy job may reveal pre-existing warnings that must be fixed before CI is green.
+
+### R6b  [REFUTED]  "Copy #2 cannot be avoided due to D3" — false D3 rationalization
+- Lokasi: `plugins/video_backend/src/lib.rs:1208-1209` (overnight HEAD 012a3ab), comment only
+- Bukti: INFERRED→REFUTED (examiner: code analysis) — Comment claimed pool copy_from_slice
+  "Cannot be avoided without exposing FFmpeg-specific AVBufferRef / AVFrame across the plugin
+  ABI, which would violate D3". This is incorrect: wrapping pool memory with `av_buffer_create`
+  and passing it as `dst->buf[0]` to `av_hwframe_transfer_data` lets the driver write directly
+  into the pool entirely within the plugin — no FFmpeg types cross the ABI. D3 is not implicated.
+- Dampak: Misleading comment could cause future contributors to avoid a valid optimization,
+  believing it violates D3. The comment also incorrectly attributed a simplicity/correctness
+  tradeoff to an architectural constraint.
+- Perbaikan: Commit 38fca3b — Comment corrected: explains the av_buffer_create approach would
+  work, documents why copy_from_slice is kept (simplicity; driver stride layout variance means
+  av_hwframe_transfer_data layout is not guaranteed to match pool canonical stride).
+  Copy #2 elimination is left as a future profiling-driven optimization.
+- Verifikasi: TRACED — grep for "R6b" in plugins/video_backend/src/lib.rs confirms updated comment.
+- Risiko perbaikan: None (comment only change; behavior unchanged).
