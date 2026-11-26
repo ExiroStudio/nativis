@@ -425,7 +425,6 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
 
             m_nv12W = realW;
             m_nv12H = realH;
-            m_nv12Active = true;
         } else {
             f->glBindTexture(GL_TEXTURE_2D, m_yTex);
             f->glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -443,6 +442,7 @@ QSGNode *NativisItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
             f->glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
             f->glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
         }
+        m_nv12Active = true;
 
         // ── Build / reuse scene graph node with NV12 material ──────────
         QSGGeometryNode *geoNode = static_cast<QSGGeometryNode *>(oldNode);
