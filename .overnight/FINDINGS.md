@@ -247,3 +247,25 @@ Format:
   Copy #2 elimination is left as a future profiling-driven optimization.
 - Verifikasi: TRACED — grep for "R6b" in plugins/video_backend/src/lib.rs confirms updated comment.
 - Risiko perbaikan: None (comment only change; behavior unchanged).
+
+### F-020  [S1]  KDE Plasma 6 plugin hidden from Wallpaper dropdown due to missing KPackageStructure
+- Lokasi: `platforms/kde-wayland/metadata.json`, `nativis-platform/kde-wayland/platform/src/lib.rs:81`
+- Bukti: PROVEN — `kpackagetool6 --type Plasma/Wallpaper --list` output:
+  `KPackageStructure of KPluginMetaData(pluginId:"com.nativis.wallpaper", ...) does not match requested format "Plasma/Wallpaper"`.
+  Compare `/usr/share/plasma/wallpapers/org.kde.color/metadata.json` (`"KPackageStructure": "Plasma/Wallpaper"`, `"X-KDE-ParentApp": "org.kde.plasmashell"`).
+- Dampak: Plugin never appears in KDE Plasma 6's Wallpaper Type dropdown; when forced via DBus (`reload_plasma()`), `wallpaperComboBox.indexOfValue('com.nativis.wallpaper')` returns `-1` and renders the dropdown blank. Also `check_and_install_bundle(false)` only checked file existence, leaving old metadata/.so files stale on update.
+- Perbaikan: Commit 5414e8e — Added `"KPackageStructure": "Plasma/Wallpaper"` and `"X-KDE-ParentApp": "org.kde.plasmashell"` to `platforms/kde-wayland/metadata.json` (and `kde-x11` parity); added `is_installed_stale()` auto-refresh + `build.rs` optional `.so` embedding so fresh CI checkouts without untracked `.so` files compile cleanly.
+- Verifikasi: PROVEN — `kpackagetool6 --type Plasma/Wallpaper --list` in isolated `XDG_DATA_HOME` now cleanly lists `com.nativis.wallpaper`.
+
+### F-021  [S1]  alpha=0 transparent DesktopView output causing compositor-wide ghosting (cursor & animations)
+- Lokasi: `nativis-platform/kde-wayland/plasma-plugin/src/lib.rs:556`, `nativis-platform/kde-x11/plasma-plugin/src/lib.rs:562`, `platforms/kde-wayland/contents/ui/main.qml`, `platforms/kde-x11/contents/ui/main.qml`
+- Bukti: PROVEN — OpenGL `QQuickRenderControl` probe with `QQuickWindow::setDefaultAlphaBuffer(true)` + `win.setColor(Qt::black)` (matching `plasmashell 6.7.5` `DesktopView` verified via `objdump`) rendered `PROBE_RESULT win.color=black rgba=(0,0,0,0) glErr=0`. Also observed live host autostart running Nov 23 v3 daemon (`/dev/shm/nativis_shm (deleted)`) against Nov 25 v4 plugin, triggering fallback buffer `dst.fill(0)` -> `RGBA(0,0,0,0)`. Because `QSGSimpleTextureNode` wrapped the texture without `TextureHasAlphaChannel`, Qt disabled blending and overwrote `DesktopView`'s `alpha=255` with `alpha=0`.
+- Dampak: `kwin_wayland` composites the transparent `DesktopView` without clearing aged swapchain buffers, causing persistent ghost trails behind the cursor and every desktop/window animation (such as minimize).
+- Perbaikan: Commits 5ad60ba, 5f9c84d — Fallback buffer now fills opaque black `[0, 0, 0, 255]`; added opaque black `Rectangle` backdrop in `main.qml` / `demo.qml`; enabled `QQuickWindow::TextureHasAlphaChannel` on `kde-wayland` RGBA `fromNative` texture over the opaque backdrop.
+- Verifikasi: PROVEN — `TEST1_NO_SHM` with `win.setColor(Qt::transparent)` renders `rgba=(0,0,0,255) glErr=0`; `test_opaque_fallback_and_resume_wait` passes in both `v1-core` and `v2-core`.
+
+### F-022  [S1]  NV12 -> RGBA switch SIGSEGV (`m_nv12Active` not set on reuse) and C++ lifecycle defects
+- Lokasi: `nativis-platform/kde-wayland/plasma-plugin-qml/nativisitem.cpp`, `nativis-platform/kde-x11/plasma-plugin-qml/nativisitem.cpp`
+- Bukti: PROVEN — OpenGL `QQuickRenderControl` test switching `NV12 -> RGBA -> NV12 -> RGBA` at `64x64` crashed with `SIGSEGV` inside `QSGSimpleTextureNode::setTexture+0x19` because `m_nv12Active = true` was only set inside `if (needsRealloc)` and skipped on texture reuse. Additionally `endExternalCommands()` was missed on early returns, `GL_ACTIVE_TEXTURE` was not restored, `currentFrameId == m_lastUploadedFrameId` skipped geometry resizes, `stopped` spun on hidden re-attach, and `~NativisItem()` leaked/deleted `QSGTexture` on GUI thread after `ItemSceneChange` detach (`window() == nullptr`).
+- Perbaikan: Commits 5ad60ba, 5f9c84d, 8f9ddab — Added `nativis_resume_wait()` and `nativis_get_epoch()`, `ExternalGlGuard` RAII, `m_nv12Active = true` outside `needsRealloc`, `node->texture() != m_rgbaQSG` check, rect/epoch gating, and `m_attachedWindow` + `releaseResources()` cleanup scheduling.
+- Verifikasi: PROVEN — `test_gl_verify` passes `TEST1_NO_SHM rgba=(0,0,0,255)`, `TEST2_RESIZE_SAME_FRAME corner(310,230) rgba=(129,127,129,255)`, and `TEST3_SWITCH_NV12_TO_RGBA first=(10,200,30,255) second_same_res=(40,180,220,255)` with `glErr=0`; `bundle-kde-wayland` compiles cleanly.
