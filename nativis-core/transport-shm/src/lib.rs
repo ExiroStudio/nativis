@@ -758,10 +758,19 @@ mod tests {
             .expect("Consumer must be able to reopen SHM after producer resize");
         assert!(reopened.size >= 64 * 64 * 4 + std::mem::size_of::<NativisFrameHeader>());
         assert!(reopened.is_valid());
-        assert!(!initial_consumer.is_valid(), "Initial consumer size is smaller than resized SHM");
+        assert!(
+            !initial_consumer.is_valid(),
+            "Initial consumer size is smaller than resized SHM"
+        );
 
         drop(sink);
-        assert!(!reopened.is_valid(), "Dropping ShmSink must unlink SHM (st_nlink == 0)");
-        assert!(ShmSurface::new(&shm_name, 0, false).is_err(), "SHM name must be unlinked on sink drop");
+        assert!(
+            !reopened.is_valid(),
+            "Dropping ShmSink must unlink SHM (st_nlink == 0)"
+        );
+        assert!(
+            ShmSurface::new(&shm_name, 0, false).is_err(),
+            "SHM name must be unlinked on sink drop"
+        );
     }
 }
