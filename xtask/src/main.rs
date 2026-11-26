@@ -204,29 +204,32 @@ fn bundle_kde() {
 
     // Generate metadata.json
     let metadata = r#"{
+    "KPackageStructure": "Plasma/Wallpaper",
     "KPlugin": {
-        "Name": "Nativis Wallpaper",
-        "Description": "High-performance multimedia wallpaper engine",
-        "Id": "com.nativis.wallpaper",
-        "Version": "1.0",
-        "Category": "Wallpaper",
         "Authors": [
             {
                 "Name": "Nativis Contributors"
             }
         ],
+        "Category": "Wallpaper",
+        "Description": "High-performance multimedia wallpaper engine",
+        "Icon": "preferences-desktop-wallpaper",
+        "Id": "com.nativis.wallpaper",
+        "Name": "Nativis Wallpaper",
         "ServiceTypes": [
             "Plasma/Wallpaper"
-        ]
+        ],
+        "Version": "1.0"
     },
-    "KPackageStructure": "Plasma/Wallpaper"
-}"#;
+    "X-KDE-ParentApp": "org.kde.plasmashell"
+}
+"#;
     fs::write(bundle_dir.join("metadata.json"), metadata).unwrap();
 
     // Generate manifest.toml
     let manifest = r#"name = "kde-x11"
 version = "1.0.0"
-protocol = 2
+protocol = 4
 "#;
     fs::write(bundle_dir.join("manifest.toml"), manifest).unwrap();
 

@@ -21,12 +21,20 @@ const CONFIG_QML: &[u8] =
 const QMLDIR: &[u8] = include_bytes!("../../../../platforms/kde-wayland/contents/ui/qmldir");
 const MAIN_XML: &[u8] =
     include_bytes!("../../../../platforms/kde-wayland/contents/config/main.xml");
-const LIBNATIVISPLUGIN_SO: &[u8] =
-    include_bytes!("../../../../platforms/kde-wayland/contents/ui/libnativisplugin.so");
-const LIBNATIVIS_V2_CORE_SO: &[u8] =
-    include_bytes!("../../../../platforms/kde-wayland/contents/ui/libnativis_v2_core.so");
+include!(concat!(env!("OUT_DIR"), "/embedded_bundle.rs"));
 
 fn install_embedded_bundle(target_dir: &Path) -> Result<()> {
+    let plugin_so = LIBNATIVISPLUGIN_SO.ok_or_else(|| {
+        anyhow!(
+            "Embedded KDE Wayland libnativisplugin.so not compiled into binary; run 'cargo xtask bundle-kde-wayland' before building"
+        )
+    })?;
+    let core_so = LIBNATIVIS_V2_CORE_SO.ok_or_else(|| {
+        anyhow!(
+            "Embedded KDE Wayland libnativis_v2_core.so not compiled into binary; run 'cargo xtask bundle-kde-wayland' before building"
+        )
+    })?;
+
     let ui_dir = target_dir.join("contents/ui");
     let config_dir = target_dir.join("contents/config");
     fs::create_dir_all(&ui_dir)?;
@@ -39,8 +47,8 @@ fn install_embedded_bundle(target_dir: &Path) -> Result<()> {
     fs::write(ui_dir.join("main.qml"), MAIN_QML)?;
     fs::write(ui_dir.join("config.qml"), CONFIG_QML)?;
     fs::write(ui_dir.join("qmldir"), QMLDIR)?;
-    fs::write(ui_dir.join("libnativisplugin.so"), LIBNATIVISPLUGIN_SO)?;
-    fs::write(ui_dir.join("libnativis_v2_core.so"), LIBNATIVIS_V2_CORE_SO)?;
+    fs::write(ui_dir.join("libnativisplugin.so"), plugin_so)?;
+    fs::write(ui_dir.join("libnativis_v2_core.so"), core_so)?;
 
     #[cfg(unix)]
     {
@@ -56,6 +64,20 @@ fn install_embedded_bundle(target_dir: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn file_differs_from_bytes(path: &Path, expected: &[u8]) -> bool {
+    match fs::read(path) {
+        Ok(actual) => actual.as_slice() != expected,
+        Err(_) => true,
+    }
+}
+
+fn file_differs_from_path(dst: &Path, src: &Path) -> bool {
+    match (fs::read(dst), fs::read(src)) {
+        (Ok(a), Ok(b)) => a != b,
+        _ => true,
+    }
 }
 
 impl KdeWaylandPlatform {
@@ -78,29 +100,102 @@ impl Default for KdeWaylandPlatform {
 }
 
 impl KdeWaylandPlatform {
+    fn is_installed_stale(&self, disk_bundle: Option<&Path>) -> bool {
+        let checks = [
+            "metadata.json",
+            "manifest.toml",
+            "contents/config/main.xml",
+            "contents/ui/main.qml",
+            "contents/ui/config.qml",
+            "contents/ui/qmldir",
+            "contents/ui/libnativisplugin.so",
+            "contents/ui/libnativis_v2_core.so",
+        ];
+
+        if let Some(bundle_dir) = disk_bundle {
+            return checks.iter().any(|rel| {
+                file_differs_from_path(&self.installed_plugin_dir.join(rel), &bundle_dir.join(rel))
+            });
+        }
+
+        if file_differs_from_bytes(
+            &self.installed_plugin_dir.join("metadata.json"),
+            METADATA_JSON,
+        ) || file_differs_from_bytes(
+            &self.installed_plugin_dir.join("manifest.toml"),
+            MANIFEST_TOML,
+        ) || file_differs_from_bytes(
+            &self.installed_plugin_dir.join("contents/config/main.xml"),
+            MAIN_XML,
+        ) || file_differs_from_bytes(
+            &self.installed_plugin_dir.join("contents/ui/main.qml"),
+            MAIN_QML,
+        ) || file_differs_from_bytes(
+            &self.installed_plugin_dir.join("contents/ui/config.qml"),
+            CONFIG_QML,
+        ) || file_differs_from_bytes(
+            &self.installed_plugin_dir.join("contents/ui/qmldir"),
+            QMLDIR,
+        ) {
+            return true;
+        }
+
+        if let Some(plugin_so) = LIBNATIVISPLUGIN_SO {
+            if file_differs_from_bytes(
+                &self
+                    .installed_plugin_dir
+                    .join("contents/ui/libnativisplugin.so"),
+                plugin_so,
+            ) {
+                return true;
+            }
+        }
+        if let Some(core_so) = LIBNATIVIS_V2_CORE_SO {
+            if file_differs_from_bytes(
+                &self
+                    .installed_plugin_dir
+                    .join("contents/ui/libnativis_v2_core.so"),
+                core_so,
+            ) {
+                return true;
+            }
+        }
+
+        false
+    }
+
     fn check_and_install_bundle(&self, force: bool) -> Result<bool> {
         let bundle_dir = find_bundle_dir();
+        let disk_bundle_ready = bundle_dir.join("contents/ui/libnativisplugin.so").exists()
+            && bundle_dir
+                .join("contents/ui/libnativis_v2_core.so")
+                .exists();
 
         let main_qml = self.installed_plugin_dir.join("contents/ui/main.qml");
         let plugin_so = self
             .installed_plugin_dir
             .join("contents/ui/libnativisplugin.so");
 
-        let needs_install = force || !main_qml.exists() || !plugin_so.exists();
+        let stale = if disk_bundle_ready {
+            self.is_installed_stale(Some(&bundle_dir))
+        } else {
+            self.is_installed_stale(None)
+        };
+        let needs_install = force || !main_qml.exists() || !plugin_so.exists() || stale;
 
         if needs_install {
             info!(
-                "Installing KDE Plasma 6 Wayland wallpaper package into {:?}...",
-                self.installed_plugin_dir
+                "Installing KDE Plasma 6 Wayland wallpaper package into {:?} (force={}, stale={})...",
+                self.installed_plugin_dir, force, stale
             );
             fs::create_dir_all(&self.installed_plugin_dir)?;
 
-            if bundle_dir.exists() {
+            if disk_bundle_ready {
                 info!("Installing from disk bundle directory: {:?}", bundle_dir);
                 copy_dir_all(&bundle_dir, &self.installed_plugin_dir)
                     .context("Failed to copy KDE Wayland wallpaper package from disk")?;
             } else {
-                info!("Disk bundle not found. Extracting embedded KDE Wayland wallpaper package into {:?}", self.installed_plugin_dir);
+                info!("Complete disk bundle not found. Extracting embedded KDE Wayland wallpaper package into {:?}", self.installed_plugin_dir);
                 install_embedded_bundle(&self.installed_plugin_dir)
                     .context("Failed to unpack embedded KDE Wayland wallpaper package")?;
             }
