@@ -1,18 +1,20 @@
 {
+    "KPackageStructure": "Plasma/Wallpaper",
     "KPlugin": {
-        "Name": "Nativis Wallpaper",
-        "Description": "High-performance multimedia wallpaper engine",
-        "Id": "com.nativis.wallpaper",
-        "Version": "1.0",
-        "Category": "Wallpaper",
         "Authors": [
             {
                 "Name": "Nativis Contributors"
             }
         ],
+        "Category": "Wallpaper",
+        "Description": "High-performance multimedia wallpaper engine",
+        "Icon": "preferences-desktop-wallpaper",
+        "Id": "com.nativis.wallpaper",
+        "Name": "Nativis Wallpaper",
         "ServiceTypes": [
             "Plasma/Wallpaper"
-        ]
+        ],
+        "Version": "1.0"
     },
-    "KPackageStructure": "Plasma/Wallpaper"
+    "X-KDE-ParentApp": "org.kde.plasmashell"
 }

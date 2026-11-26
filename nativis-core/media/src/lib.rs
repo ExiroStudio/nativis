@@ -6,15 +6,10 @@
 
 pub mod clock;
 pub mod frame;
-pub mod source;
 pub mod image_source;
+pub mod source;
 
 pub use clock::MediaClock;
-pub use frame::{VideoFrame, PixelFormat, ColorSpace, MediaState};
-pub use source::IMediaSource;
+pub use frame::{ColorSpace, MediaState, PixelFormat, VideoFrame};
 pub use image_source::ImageSource;
-
-#[cfg(feature = "video")]
-pub mod video_source;
-#[cfg(feature = "video")]
-pub use video_source::VideoFileSource;
+pub use source::IMediaSource;

@@ -9,7 +9,8 @@ fn main() {
 
     if let Ok(payload_path) = env::var("NATIVIS_PAYLOAD") {
         if Path::new(&payload_path).exists() {
-            fs::copy(&payload_path, &dest_path).expect("Failed to copy NATIVIS_PAYLOAD file to OUT_DIR");
+            fs::copy(&payload_path, &dest_path)
+                .expect("Failed to copy NATIVIS_PAYLOAD file to OUT_DIR");
             return;
         }
     }

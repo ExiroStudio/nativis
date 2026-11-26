@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+default = []
+x11-fullscreen = ["dep:x11rb"]
+
 [dependencies]
 nativis-core = { workspace = true }
 nativis-transport-shm = { workspace = true }
@@ -12,3 +16,4 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+x11rb = { version = "0.13", optional = true, default-features = false, features = ["allow-unsafe-code"] }

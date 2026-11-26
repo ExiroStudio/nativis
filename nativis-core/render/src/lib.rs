@@ -13,8 +13,8 @@
 //! 4. **Present**     — Hand the surface back to the RHI for presentation.
 
 pub mod blit;
-pub mod renderer;
 pub mod post;
+pub mod renderer;
 
-pub use renderer::Renderer;
 pub use post::PostEffect;
+pub use renderer::Renderer;

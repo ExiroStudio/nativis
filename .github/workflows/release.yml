@@ -110,8 +110,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           # C7: Pin immutable dated release matching ffmpeg-sys-next 9.0.x with SHA-256 integrity verification
-          $url = "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/autobuild-2026-11-10-12-39/ffmpeg-n9.0.2-48-gd4070a14ce-win64-gpl-shared-9.0.zip"
-          $expectedHash = "33e50d43c978337588f143f1b8e88d332173827934d664eb960db30a7de8037c"
+          $url = "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/autobuild-2026-11-25-12-41/ffmpeg-n9.0.2-963-g4d831360c9-win64-gpl-shared-9.0.zip"
+          $expectedHash = "922b4ca843ee388f49898991effbfd5396c828e467c4738a05d3a908344ec529"
           Write-Host "Downloading FFmpeg 9.0 shared build from $url..."
           Invoke-WebRequest -Uri $url -OutFile "ffmpeg.zip"
           $actualHash = (Get-FileHash -Algorithm SHA256 "ffmpeg.zip").Hash.ToLower()

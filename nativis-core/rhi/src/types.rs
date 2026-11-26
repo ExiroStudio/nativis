@@ -13,10 +13,10 @@ use std::sync::Arc;
 /// the GPU texture and view.
 #[derive(Clone)]
 pub struct TextureHandle {
-    view:    Arc<wgpu::TextureView>,
+    view: Arc<wgpu::TextureView>,
     texture: Arc<wgpu::Texture>,
-    width:   u32,
-    height:  u32,
+    width: u32,
+    height: u32,
 }
 
 impl TextureHandle {
@@ -26,11 +26,20 @@ impl TextureHandle {
         width: u32,
         height: u32,
     ) -> Self {
-        Self { view, texture, width, height }
+        Self {
+            view,
+            texture,
+            width,
+            height,
+        }
     }
 
-    pub fn width(&self) -> u32 { self.width }
-    pub fn height(&self) -> u32 { self.height }
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+    pub fn height(&self) -> u32 {
+        self.height
+    }
 
     /// Access the raw wgpu TextureView and Texture for internal RHI use only.
     /// Returns `None` if the handle is invalid (should not happen in practice).
@@ -69,14 +78,14 @@ pub enum TextureFormat {
 impl TextureFormat {
     pub fn to_wgpu(self) -> Option<wgpu::TextureFormat> {
         match self {
-            Self::Rgba8Unorm     => Some(wgpu::TextureFormat::Rgba8Unorm),
+            Self::Rgba8Unorm => Some(wgpu::TextureFormat::Rgba8Unorm),
             Self::Rgba8UnormSrgb => Some(wgpu::TextureFormat::Rgba8UnormSrgb),
-            Self::Rgba16Float    => Some(wgpu::TextureFormat::Rgba16Float),
-            Self::R8Unorm        => Some(wgpu::TextureFormat::R8Unorm),
-            Self::Rg8Unorm       => Some(wgpu::TextureFormat::Rg8Unorm),
-            Self::Bgra8Unorm     => Some(wgpu::TextureFormat::Bgra8Unorm),
+            Self::Rgba16Float => Some(wgpu::TextureFormat::Rgba16Float),
+            Self::R8Unorm => Some(wgpu::TextureFormat::R8Unorm),
+            Self::Rg8Unorm => Some(wgpu::TextureFormat::Rg8Unorm),
+            Self::Bgra8Unorm => Some(wgpu::TextureFormat::Bgra8Unorm),
             Self::Bgra8UnormSrgb => Some(wgpu::TextureFormat::Bgra8UnormSrgb),
-            Self::Nv12           => None,
+            Self::Nv12 => None,
         }
     }
 
@@ -84,8 +93,7 @@ impl TextureFormat {
         match self {
             Self::R8Unorm => 1,
             Self::Rg8Unorm => 2,
-            Self::Rgba8Unorm | Self::Rgba8UnormSrgb
-            | Self::Bgra8Unorm | Self::Bgra8UnormSrgb => 4,
+            Self::Rgba8Unorm | Self::Rgba8UnormSrgb | Self::Bgra8Unorm | Self::Bgra8UnormSrgb => 4,
             Self::Rgba16Float => 8,
             Self::Nv12 => 1, // Y plane only
         }
@@ -109,11 +117,11 @@ bitflags::bitflags! {
 
 #[derive(Debug, Clone)]
 pub struct TextureDescriptor {
-    pub label:      Option<String>,
-    pub width:      u32,
-    pub height:     u32,
-    pub format:     TextureFormat,
-    pub usage:      TextureUsage,
+    pub label: Option<String>,
+    pub width: u32,
+    pub height: u32,
+    pub format: TextureFormat,
+    pub usage: TextureUsage,
     pub mip_levels: u32,
 }
 
@@ -166,12 +174,18 @@ pub enum RhiError {
 // ── Backend type tag ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BackendType { Vulkan, Metal, DirectX12, OpenGL, WebGpu }
+pub enum BackendType {
+    Vulkan,
+    Metal,
+    DirectX12,
+    OpenGL,
+    WebGpu,
+}
 
 // ── Texture upload helper (for IRhiBackend::upload_texture_data) ─────────────
 
 pub struct TextureUpload<'a> {
-    pub handle:        &'a TextureHandle,
-    pub data:          &'a [u8],
+    pub handle: &'a TextureHandle,
+    pub data: &'a [u8],
     pub bytes_per_row: u32,
 }

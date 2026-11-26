@@ -15,11 +15,11 @@
 pub mod clock;
 pub mod contract;
 pub mod event;
-pub mod resource;
 pub mod platform;
+pub mod resource;
 
 pub use clock::MediaClock;
-pub use contract::{FrameStatus, MediaBackend, MediaCapability, Frame, FrameSink, ResourceHandle};
+pub use contract::{Frame, FrameSink, FrameStatus, MediaBackend, MediaCapability, ResourceHandle};
 pub use event::EngineEvent;
-pub use resource::{ResourceManager, Resource, CpuBuffer};
 pub use platform::Platform;
+pub use resource::{CpuBuffer, GpuDeviceResource, GpuTextureResource, Resource, ResourceManager};

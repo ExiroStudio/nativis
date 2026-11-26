@@ -21,24 +21,24 @@ pub struct D3D11GpuFrame {
 /// The Runtime and Transport layer receive this purely as data.
 #[derive(Clone)]
 pub struct DecodedFrame {
-    pub width:     u32,
-    pub height:    u32,
+    pub width: u32,
+    pub height: u32,
     /// Raw PTS as returned by libavcodec. Preserved exactly to avoid
     /// precision loss for streams with unusual time bases.
-    pub pts:       i64,
+    pub pts: i64,
     /// Numerator and denominator of the stream's time base.
     /// Stored separately from `pts` so absolute time can be computed
     /// later without floating-point accumulation error.
     pub time_base_num: i32,
     pub time_base_den: i32,
     /// Y plane (luma) — full resolution, 1 byte per pixel.
-    pub y_plane:       Arc<[u8]>,
+    pub y_plane: Arc<[u8]>,
     /// UV plane (chroma, interleaved) — half resolution.
-    pub uv_plane:      Arc<[u8]>,
+    pub uv_plane: Arc<[u8]>,
     /// Stride (bytes per row) of the Y plane — may be > width due to alignment.
-    pub y_stride:      u32,
+    pub y_stride: u32,
     /// Stride (bytes per row) of the UV plane — may be > width due to alignment.
-    pub uv_stride:     u32,
+    pub uv_stride: u32,
     /// Height of the chroma plane: ceil(height / 2).
     pub chroma_height: u32,
     /// Direct3D 11 GPU texture reference (VRAM zero-copy on Windows).

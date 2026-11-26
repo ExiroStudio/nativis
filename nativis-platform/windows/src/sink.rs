@@ -1,13 +1,13 @@
-use std::sync::Arc;
+use crate::throttler::Throttler;
 use anyhow::Result;
 use nativis_core::contract::{Frame, FrameSink, MediaError};
 use nativis_core::resource::ResourceManager;
-use crate::throttler::Throttler;
+use std::sync::Arc;
 
 #[cfg(windows)]
 use anyhow::Context;
 #[cfg(windows)]
-use nativis_core::resource::{CpuBuffer, PlanarBuffer, Resource};
+use nativis_core::resource::{CpuBuffer, PlanarBuffer};
 #[cfg(windows)]
 use parking_lot::Mutex;
 #[cfg(windows)]
@@ -16,25 +16,9 @@ use tracing::warn;
 #[cfg(windows)]
 use crate::d3d11_renderer::D3D11Renderer;
 
-/// Internal GPU-backed Direct3D 11 texture resource for Windows platform.
-/// Kept isolated to Windows crate (D1.3, D4) rather than leaking into nativis-core.
-#[cfg(windows)]
-pub struct D3D11TextureResource {
-    pub texture_ptr: usize,
-    pub subresource_index: u32,
-    pub width: u32,
-    pub height: u32,
-    pub format: u32,
-    pub keeper: Option<Arc<dyn std::any::Any + Send + Sync>>,
-}
-
-#[cfg(windows)]
-impl Resource for D3D11TextureResource {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-
+/// GPU-backed Direct3D 11 texture resource for Windows platform.
+/// Aliased to neutral GpuTextureResource in core (D1.3, D4).
+pub type D3D11TextureResource = nativis_core::resource::GpuTextureResource;
 
 pub struct WindowsDirectSink {
     pub wallpaper_hwnd: Arc<std::sync::atomic::AtomicIsize>,
@@ -78,8 +62,7 @@ impl WindowsDirectSink {
 
     pub fn with_shared(
         wallpaper_hwnd: Arc<std::sync::atomic::AtomicIsize>,
-        #[cfg(windows)]
-        renderer: Arc<Mutex<Option<D3D11Renderer>>>,
+        #[cfg(windows)] renderer: Arc<Mutex<Option<D3D11Renderer>>>,
         _throttler: Arc<Throttler>,
         resources: ResourceManager,
     ) -> Self {
@@ -113,15 +96,20 @@ impl FrameSink for WindowsDirectSink {
                 return Ok(());
             }
 
-
             let mut renderer_guard = self.renderer.lock();
             let renderer = match renderer_guard.as_mut() {
                 Some(r) => r,
-                None => return Err(MediaError::GpuUpload("D3D11 Renderer not initialized".into())),
+                None => {
+                    return Err(MediaError::GpuUpload(
+                        "D3D11 Renderer not initialized".into(),
+                    ))
+                }
             };
 
             // 1. Adjust swapchain buffers if window dimensions changed
-            let current_hwnd = self.wallpaper_hwnd.load(std::sync::atomic::Ordering::Relaxed);
+            let current_hwnd = self
+                .wallpaper_hwnd
+                .load(std::sync::atomic::Ordering::Relaxed);
             if current_hwnd != 0 {
                 let mut rc: windows::Win32::Foundation::RECT = unsafe { std::mem::zeroed() };
                 let ok = unsafe {
@@ -133,7 +121,10 @@ impl FrameSink for WindowsDirectSink {
                 if ok.is_ok() {
                     let win_w = (rc.right - rc.left) as u32;
                     let win_h = (rc.bottom - rc.top) as u32;
-                    if win_w > 0 && win_h > 0 && (win_w != renderer.width() || win_h != renderer.height()) {
+                    if win_w > 0
+                        && win_h > 0
+                        && (win_w != renderer.width() || win_h != renderer.height())
+                    {
                         let _ = renderer.resize(win_w, win_h);
                     }
                 }
@@ -147,9 +138,8 @@ impl FrameSink for WindowsDirectSink {
                     if ptr.is_null() {
                         return false;
                     }
-                    let tex: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D = unsafe {
-                        std::mem::transmute(&ptr)
-                    };
+                    let tex: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D =
+                        unsafe { std::mem::transmute(&ptr) };
                     if let Err(e) = renderer.draw_d3d11_texture(
                         tex,
                         gpu.subresource_index,
@@ -203,13 +193,25 @@ impl FrameSink for WindowsDirectSink {
                 }
             });
 
-            if success == Some(true) {
-                if let Err(e) = renderer.present() {
-                    warn!("D3D11 present error: {}", e);
+            match success {
+                Some(true) => {
+                    if let Err(e) = renderer.present() {
+                        warn!("D3D11 present error: {}", e);
+                    }
+                    Ok(())
                 }
-                Ok(())
-            } else {
-                Err(MediaError::GpuUpload("Failed to render frame to D3D11 swapchain".into()))
+                // Resource known but drawing failed: keep reporting the real error.
+                Some(false) => Err(MediaError::GpuUpload(
+                    "Failed to render frame to D3D11 swapchain".into(),
+                )),
+                // Resource already freed (e.g. image CpuBuffer released after the first frame):
+                // redraw from the renderer's persistent texture instead of failing silently.
+                None => renderer.re_present_last_frame().map_err(|e| {
+                    MediaError::GpuUpload(format!(
+                        "Re-present from persistent texture failed: {}",
+                        e
+                    ))
+                }),
             }
         }
         #[cfg(not(windows))]
@@ -217,6 +219,20 @@ impl FrameSink for WindowsDirectSink {
             let _ = frame;
             let _ = &self.resources;
             Ok(())
+        }
+    }
+
+    fn capabilities(&self) -> nativis_core::contract::SinkCapabilities {
+        nativis_core::contract::SinkCapabilities {
+            accepted_kinds: vec![
+                nativis_protocol::NATIVIS_SURFACE_KIND_D3D11_SHARED,
+                nativis_protocol::NATIVIS_SURFACE_KIND_CPU_PLANAR,
+                nativis_protocol::NATIVIS_SURFACE_KIND_CPU_BUFFER,
+            ],
+            accepted_formats: vec![
+                nativis_protocol::NATIVIS_FORMAT_NV12,
+                nativis_protocol::NATIVIS_FORMAT_RGBA8888,
+            ],
         }
     }
 }

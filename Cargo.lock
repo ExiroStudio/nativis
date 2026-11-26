@@ -3033,7 +3033,6 @@ name = "nativis-media"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
- "ffmpeg-next",
  "image",
  "nativis-asset",
  "nativis-core",
@@ -3052,6 +3051,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
+ "x11rb",
 ]
 
 [[package]]
@@ -3089,6 +3089,7 @@ dependencies = [
  "anyhow",
  "crossbeam-channel",
  "nativis-core",
+ "nativis-protocol",
  "parking_lot",
  "tracing",
  "windows 0.58.0",
@@ -3195,6 +3196,7 @@ name = "nativis-v1-core"
 version = "1.0.0"
 dependencies = [
  "libc",
+ "nativis-core",
  "nativis-protocol",
  "nativis-transport-shm",
 ]
@@ -3204,6 +3206,7 @@ name = "nativis-v2-core"
 version = "1.0.0"
 dependencies = [
  "libc",
+ "nativis-core",
  "nativis-protocol",
  "nativis-transport-shm",
 ]

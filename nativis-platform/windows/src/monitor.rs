@@ -2,28 +2,23 @@
 use tracing::{info, warn};
 
 #[cfg(windows)]
-use windows::{
-    Win32::{
-        Foundation::{BOOL, LPARAM, RECT},
-        Graphics::Gdi::{
-            EnumDisplayMonitors, GetMonitorInfoW, MONITORINFO, HDC, HMONITOR,
+use windows::Win32::{
+    Devices::Display::{
+        DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QueryDisplayConfig,
+        DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME, DISPLAYCONFIG_DEVICE_INFO_HEADER,
+        DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_TARGET_DEVICE_NAME,
+        QDC_ONLY_ACTIVE_PATHS,
+    },
+    Foundation::{BOOL, LPARAM, RECT},
+    Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO},
+    UI::{
+        HiDpi::{
+            GetDpiForMonitor, SetProcessDpiAwarenessContext,
+            DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, MDT_EFFECTIVE_DPI,
         },
-        UI::{
-            HiDpi::{
-                GetDpiForMonitor, SetProcessDpiAwarenessContext,
-                DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, MDT_EFFECTIVE_DPI,
-            },
-            WindowsAndMessaging::{
-                GetSystemMetrics, MONITORINFOF_PRIMARY,
-                SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-                SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
-            },
-        },
-        Devices::Display::{
-            GetDisplayConfigBufferSizes, QueryDisplayConfig, DisplayConfigGetDeviceInfo,
-            QDC_ONLY_ACTIVE_PATHS, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_MODE_INFO,
-            DISPLAYCONFIG_TARGET_DEVICE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
-            DISPLAYCONFIG_DEVICE_INFO_HEADER,
+        WindowsAndMessaging::{
+            GetSystemMetrics, MONITORINFOF_PRIMARY, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+            SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
         },
     },
 };
@@ -192,7 +187,9 @@ pub fn query_display_paths() -> Vec<DisplayPathDetails> {
     unsafe {
         let mut path_count = 0u32;
         let mut mode_count = 0u32;
-        if GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut path_count, &mut mode_count).is_err() {
+        if GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut path_count, &mut mode_count)
+            .is_err()
+        {
             return Vec::new();
         }
         let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); path_count as usize];
@@ -204,7 +201,9 @@ pub fn query_display_paths() -> Vec<DisplayPathDetails> {
             &mut mode_count,
             modes.as_mut_ptr(),
             None,
-        ).is_err() {
+        )
+        .is_err()
+        {
             return Vec::new();
         }
         paths.truncate(path_count as usize);
@@ -221,17 +220,18 @@ pub fn query_display_paths() -> Vec<DisplayPathDetails> {
                 ..Default::default()
             };
 
-            let (friendly_name, device_path) = if DisplayConfigGetDeviceInfo(&mut target_name.header) == 0 {
-                let f_name = String::from_utf16_lossy(&target_name.monitorFriendlyDeviceName)
-                    .trim_matches('\0')
-                    .to_string();
-                let d_path = String::from_utf16_lossy(&target_name.monitorDevicePath)
-                    .trim_matches('\0')
-                    .to_string();
-                (f_name, d_path)
-            } else {
-                (String::new(), String::new())
-            };
+            let (friendly_name, device_path) =
+                if DisplayConfigGetDeviceInfo(&mut target_name.header) == 0 {
+                    let f_name = String::from_utf16_lossy(&target_name.monitorFriendlyDeviceName)
+                        .trim_matches('\0')
+                        .to_string();
+                    let d_path = String::from_utf16_lossy(&target_name.monitorDevicePath)
+                        .trim_matches('\0')
+                        .to_string();
+                    (f_name, d_path)
+                } else {
+                    (String::new(), String::new())
+                };
 
             let refresh_rate_mhz = if path.targetInfo.refreshRate.Denominator > 0 {
                 ((path.targetInfo.refreshRate.Numerator as u64 * 1000)
@@ -249,4 +249,3 @@ pub fn query_display_paths() -> Vec<DisplayPathDetails> {
         results
     }
 }
-

@@ -1,11 +1,11 @@
-use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-#[cfg(unix)]
-use std::path::Path;
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 
 pub mod config;
 pub use config::UserConfig;
@@ -89,7 +89,7 @@ pub struct PluginInfo {
     pub name: String,
     pub category: String, // "platform_adapter", "media_source"
     pub description: String,
-    pub status: String,    // "active", "installed", "available"
+    pub status: String, // "active", "installed", "available"
     pub version: String,
 }
 
@@ -107,14 +107,18 @@ pub struct EnvironmentInfo {
 /// Detects the host operating system, desktop environment, and display server.
 pub fn detect_environment() -> EnvironmentInfo {
     let os = std::env::consts::OS.to_string();
-    
+
     #[cfg(target_os = "linux")]
     let (os_release, de, display_server, is_wayland) = {
         let release = std::fs::read_to_string("/etc/os-release")
             .unwrap_or_default()
             .lines()
             .find(|line| line.starts_with("PRETTY_NAME="))
-            .map(|line| line.trim_start_matches("PRETTY_NAME=").trim_matches('"').to_string())
+            .map(|line| {
+                line.trim_start_matches("PRETTY_NAME=")
+                    .trim_matches('"')
+                    .to_string()
+            })
             .unwrap_or_else(|| "Linux".to_string());
 
         let de_raw = std::env::var("XDG_CURRENT_DESKTOP")
@@ -141,8 +145,16 @@ pub fn detect_environment() -> EnvironmentInfo {
     let (os_release, de, display_server, is_wayland) = {
         (
             format!("{} ({})", os, std::env::consts::ARCH),
-            if cfg!(target_os = "windows") { "Windows Shell / DWM".to_string() } else { "Aqua / Cocoa".to_string() },
-            if cfg!(target_os = "windows") { "DWM".to_string() } else { "Quartz".to_string() },
+            if cfg!(target_os = "windows") {
+                "Windows Shell / DWM".to_string()
+            } else {
+                "Aqua / Cocoa".to_string()
+            },
+            if cfg!(target_os = "windows") {
+                "DWM".to_string()
+            } else {
+                "Quartz".to_string()
+            },
             false,
         )
     };
@@ -151,12 +163,23 @@ pub fn detect_environment() -> EnvironmentInfo {
     let is_kde = de_upper.contains("KDE");
 
     let (recommended_adapter, active_sink_name) = if is_kde {
-        ("KDE Plasma Native QML Adapter (SHM)", "KDE Native QML (SHM)")
+        (
+            "KDE Plasma Native QML Adapter (SHM)",
+            "KDE Native QML (SHM)",
+        )
     } else if is_wayland {
-        ("Wayland Layer-Shell Adapter (Layer::Background)", "Wayland Layer::Background (WGPU)")
+        (
+            "Wayland Layer-Shell Adapter (Layer::Background)",
+            "Wayland Layer::Background (WGPU)",
+        )
     } else if de_upper.contains("GNOME") {
         ("GNOME Shell Dedicated Adapter", "GNOME Desktop Extension")
-    } else if de_upper.contains("XFCE") || de_upper.contains("I3") || de_upper.contains("BSPWM") || de_upper.contains("CINNAMON") || de_upper.contains("MATE") {
+    } else if de_upper.contains("XFCE")
+        || de_upper.contains("I3")
+        || de_upper.contains("BSPWM")
+        || de_upper.contains("CINNAMON")
+        || de_upper.contains("MATE")
+    {
         ("X11 Root Window Adapter", "X11 Root Window Overlay")
     } else if cfg!(target_os = "windows") {
         ("Windows WorkerW Adapter", "WorkerW DWM Swapchain")
@@ -255,18 +278,22 @@ pub fn send_command(cmd: &IpcCommand) -> Result<IpcResponse> {
                 Ok(file) => break file,
                 Err(e) if e.raw_os_error() == Some(231) && attempts < 10 => {
                     attempts += 1;
-                    let wide_path: Vec<u16> = pipe_path.as_os_str().encode_wide().chain(Some(0)).collect();
+                    let wide_path: Vec<u16> =
+                        pipe_path.as_os_str().encode_wide().chain(Some(0)).collect();
                     unsafe {
                         windows_sys::Win32::System::Pipes::WaitNamedPipeW(wide_path.as_ptr(), 500);
                     }
                 }
                 Err(e) => {
-                    return Err(e).with_context(|| format!("Failed to connect to daemon pipe at {:?}", pipe_path));
+                    return Err(e).with_context(|| {
+                        format!("Failed to connect to daemon pipe at {:?}", pipe_path)
+                    });
                 }
             }
         };
 
-        let stream_reader = stream.try_clone()
+        let stream_reader = stream
+            .try_clone()
             .with_context(|| "Failed to clone pipe handle for reading")?;
 
         let mut payload = serde_json::to_string(cmd)?;
@@ -401,7 +428,11 @@ mod tests {
         let decoded: IpcCommand = serde_json::from_str(&json).expect("Deserialize failed");
 
         match decoded {
-            IpcCommand::SetWallpaper { uri, monitor, scaling } => {
+            IpcCommand::SetWallpaper {
+                uri,
+                monitor,
+                scaling,
+            } => {
                 assert_eq!(uri, "video4k.mp4");
                 assert_eq!(monitor, Some("DP-1".into()));
                 assert_eq!(scaling, Some("fill".into()));
@@ -415,7 +446,9 @@ mod tests {
         let plugins = get_default_plugins();
         assert!(plugins.iter().any(|p| p.category == "platform_adapter"));
         assert!(plugins.iter().any(|p| p.category == "media_source"));
-        assert!(plugins.iter().any(|p| p.id == "platform-kde" && p.status == "active"));
+        assert!(plugins
+            .iter()
+            .any(|p| p.id == "platform-kde" && p.status == "active"));
     }
 
     #[test]

@@ -1,9 +1,9 @@
-use std::ptr::NonNull;
 use anyhow::{Context, Result};
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle, WindowHandle,
 };
+use std::ptr::NonNull;
 
 pub struct WaylandSurfaceHandle {
     pub display_ptr: *mut std::ffi::c_void,
@@ -132,13 +132,15 @@ impl WaylandWgpuRenderer {
                 raw_display_handle: handle.display_handle()?.as_raw(),
                 raw_window_handle: handle.window_handle()?.as_raw(),
             })
-        }.context("Failed to create WGPU surface for Wayland")?;
+        }
+        .context("Failed to create WGPU surface for Wayland")?;
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
-        })).context("No suitable GPU adapter found")?;
+        }))
+        .context("No suitable GPU adapter found")?;
 
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
@@ -148,10 +150,14 @@ impl WaylandWgpuRenderer {
                 memory_hints: Default::default(),
             },
             None,
-        )).context("Failed to create WGPU device")?;
+        ))
+        .context("Failed to create WGPU device")?;
 
         let caps = surface.get_capabilities(&adapter);
-        let surface_format = caps.formats.iter().copied()
+        let surface_format = caps
+            .formats
+            .iter()
+            .copied()
             .find(|f| f.is_srgb())
             .unwrap_or(caps.formats[0]);
 
@@ -329,6 +335,7 @@ impl WaylandWgpuRenderer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_nv12(
         &mut self,
         y_data: &[u8],
@@ -452,13 +459,19 @@ impl WaylandWgpuRenderer {
         );
 
         // Render pass to surface
-        let output = self.surface.get_current_texture()
+        let output = self
+            .surface
+            .get_current_texture()
             .context("Failed to acquire next swapchain texture")?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Wayland Render Encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Wayland Render Encoder"),
+            });
 
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -556,13 +569,19 @@ impl WaylandWgpuRenderer {
             },
         );
 
-        let output = self.surface.get_current_texture()
+        let output = self
+            .surface
+            .get_current_texture()
             .context("Failed to acquire next swapchain texture")?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Wayland RGBA Render Encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Wayland RGBA Render Encoder"),
+            });
 
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

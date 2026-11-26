@@ -84,7 +84,11 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for WaylandShellSta
         _qhandle: &QueueHandle<Self>,
     ) {
         match event {
-            zwlr_layer_surface_v1::Event::Configure { serial, width, height } => {
+            zwlr_layer_surface_v1::Event::Configure {
+                serial,
+                width,
+                height,
+            } => {
                 // ack_configure must be sent before the next wl_surface.commit()
                 surface.ack_configure(serial);
                 state.configured = true;
@@ -115,8 +119,7 @@ pub struct WaylandShell {
 
 impl WaylandShell {
     pub fn new() -> Result<Self> {
-        let conn = Connection::connect_to_env()
-            .context("Failed to connect to Wayland display")?;
+        let conn = Connection::connect_to_env().context("Failed to connect to Wayland display")?;
 
         let (globals, mut event_queue) = registry_queue_init::<WaylandShellState>(&conn)
             .context("Failed to initialize Wayland registry")?;
@@ -160,9 +163,8 @@ impl WaylandShell {
         layer_surface.set_anchor(all_anchors);
         // -1 = don't push panels/docks; we render behind everything that matters
         layer_surface.set_exclusive_zone(-1);
-        layer_surface.set_keyboard_interactivity(
-            zwlr_layer_surface_v1::KeyboardInteractivity::None,
-        );
+        layer_surface
+            .set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::None);
 
         // --- Layer shell two-commit handshake ---
         // 1. First commit: tells the compositor to send us a `configure` event with
@@ -178,7 +180,8 @@ impl WaylandShell {
 
         // First roundtrip: blocks until configure is received and ack_configure is sent
         // (ack_configure happens inside the Dispatch impl above)
-        event_queue.roundtrip(&mut state)
+        event_queue
+            .roundtrip(&mut state)
             .context("Initial Wayland roundtrip failed")?;
 
         // 2. Second commit: after ack_configure the compositor waits for this commit
@@ -187,7 +190,8 @@ impl WaylandShell {
         surface.commit();
 
         // Second roundtrip: flush the second commit and confirm compositor accepted it
-        event_queue.roundtrip(&mut state)
+        event_queue
+            .roundtrip(&mut state)
             .context("Post-configure Wayland roundtrip failed")?;
 
         info!(

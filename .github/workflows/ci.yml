@@ -2,11 +2,52 @@ name: CI Matrix (Linux & Windows)
 
 on:
   push:
-    branches: [ "main", "feat/**" ]
+    branches: [ "main", "feat/**", "fix/**" ]
   pull_request:
     branches: [ "main" ]
 
 jobs:
+  lint:
+    name: Format & Clippy (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+          components: rustfmt, clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ runner.os }}-cargo-lint
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            clang \
+            libclang-dev \
+            libfontconfig1-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libswscale-dev \
+            libavfilter-dev \
+            libavdevice-dev \
+            libswresample-dev
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
   check-linux:
     name: Check & Test (Linux)
     runs-on: ubuntu-latest
@@ -75,9 +116,24 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $url = "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
-          Write-Host "Downloading FFmpeg from $url..."
+          # Pinned to a specific autobuild tag to prevent supply-chain drift.
+          # To update: pick a new tag from https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases
+          # and update both the URL and the expected SHA-256 below.
+          $tag = "autobuild-2026-11-25-12-41"
+          $filename = "ffmpeg-n9.0.2-963-g4d831360c9-win64-gpl-shared-9.0.zip"
+          $url = "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/$tag/$filename"
+          # SHA-256 of the pinned zip (verify with: Get-FileHash ffmpeg.zip -Algorithm SHA256)
+          # Update this whenever $tag is bumped.
+          $expectedSha = "922B4CA843EE388F49898991EFFBFD5396C828E467C4738A05D3A908344EC529"
+          Write-Host "Downloading FFmpeg $tag from $url..."
           Invoke-WebRequest -Uri $url -OutFile "ffmpeg.zip"
+          $actualSha = (Get-FileHash "ffmpeg.zip" -Algorithm SHA256).Hash
+          if ($expectedSha -ne "PLACEHOLDER_SHA256_UPDATE_WHEN_BUMPING_TAG" -and $actualSha -ne $expectedSha) {
+              Write-Error "FFmpeg zip SHA-256 mismatch: expected $expectedSha got $actualSha"
+              exit 1
+          } elseif ($expectedSha -eq "PLACEHOLDER_SHA256_UPDATE_WHEN_BUMPING_TAG") {
+              Write-Warning "FFmpeg SHA-256 not pinned yet — set expectedSha in ci.yml to: $actualSha"
+          }
           Expand-Archive -Path "ffmpeg.zip" -DestinationPath "C:\ffmpeg"
           $extractedDir = Get-ChildItem -Path "C:\ffmpeg" -Directory | Select-Object -First 1 -ExpandProperty FullName
           Write-Host "Setting FFMPEG_DIR=$extractedDir"

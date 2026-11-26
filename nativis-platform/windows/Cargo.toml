@@ -7,6 +7,7 @@ authors.workspace = true
 
 [dependencies]
 nativis-core = { workspace = true }
+nativis-protocol = { workspace = true }
 tracing      = { workspace = true }
 anyhow       = { workspace = true }
 parking_lot  = { workspace = true }

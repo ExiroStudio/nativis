@@ -12,3 +12,9 @@ windows-support/*
 desktop-dump.txt
 script.ps1
 Visual/
+# Compiled shared libraries — built by xtask bundle-all, not version-controlled
+*.so
+platforms/kde-wayland/contents/ui/libnativis_v2_core.so
+platforms/kde-wayland/contents/ui/libnativisplugin.so
+platforms/kde-x11/contents/ui/libnativis_v1_core.so
+platforms/kde-x11/contents/ui/libnativisplugin.so

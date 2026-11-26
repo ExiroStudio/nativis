@@ -20,7 +20,7 @@ pub type BackendFactory = Box<dyn Fn() -> Box<dyn MediaBackend> + Send + Sync>;
 
 /// A registered backend entry: factory + supported-uri predicate.
 struct BackendEntry {
-    name:    &'static str,
+    name: &'static str,
     factory: BackendFactory,
 }
 
@@ -34,7 +34,9 @@ pub struct PluginManager {
 
 impl PluginManager {
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     /// Register a media backend factory.
@@ -46,7 +48,10 @@ impl PluginManager {
         F: Fn() -> Box<dyn MediaBackend> + Send + Sync + 'static,
     {
         debug!("Plugin registered: {name}");
-        self.entries.push(BackendEntry { name, factory: Box::new(factory) });
+        self.entries.push(BackendEntry {
+            name,
+            factory: Box::new(factory),
+        });
     }
 
     /// Find and instantiate a backend that supports the given `AssetPath`.
@@ -58,7 +63,11 @@ impl PluginManager {
             // Probe using a temporary instance — supports() is cheap.
             let probe = (entry.factory)();
             if probe.supports(source) {
-                debug!("Backend '{}' selected for '{}'", entry.name, source.raw_uri());
+                debug!(
+                    "Backend '{}' selected for '{}'",
+                    entry.name,
+                    source.raw_uri()
+                );
                 // Return a fresh instance (not the probe).
                 return Some((entry.factory)());
             }
@@ -68,10 +77,16 @@ impl PluginManager {
     }
 
     /// Number of registered backends.
-    pub fn len(&self) -> usize { self.entries.len() }
-    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 impl Default for PluginManager {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
