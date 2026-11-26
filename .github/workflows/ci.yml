@@ -33,6 +33,7 @@ jobs:
             pkg-config \
             clang \
             libclang-dev \
+            libfontconfig1-dev \
             libavcodec-dev \
             libavformat-dev \
             libavutil-dev \
@@ -118,12 +119,12 @@ jobs:
           # Pinned to a specific autobuild tag to prevent supply-chain drift.
           # To update: pick a new tag from https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases
           # and update both the URL and the expected SHA-256 below.
-          $tag = "autobuild-2024-11-07-12-56"
-          $filename = "ffmpeg-master-latest-win64-gpl-shared.zip"
+          $tag = "autobuild-2026-11-25-12-41"
+          $filename = "ffmpeg-n9.0.2-963-g4d831360c9-win64-gpl-shared-9.0.zip"
           $url = "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/$tag/$filename"
           # SHA-256 of the pinned zip (verify with: Get-FileHash ffmpeg.zip -Algorithm SHA256)
           # Update this whenever $tag is bumped.
-          $expectedSha = "PLACEHOLDER_SHA256_UPDATE_WHEN_BUMPING_TAG"
+          $expectedSha = "922B4CA843EE388F49898991EFFBFD5396C828E467C4738A05D3A908344EC529"
           Write-Host "Downloading FFmpeg $tag from $url..."
           Invoke-WebRequest -Uri $url -OutFile "ffmpeg.zip"
           $actualSha = (Get-FileHash "ffmpeg.zip" -Algorithm SHA256).Hash
