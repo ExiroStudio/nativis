@@ -260,9 +260,7 @@ impl NativisConsumer {
             if let Ok(handle) = session.surface.acquire() {
                 if handle.size >= std::mem::size_of::<NativisFrameHeader>() {
                     let magic = unsafe {
-                        std::ptr::read_volatile(
-                            &(*(handle.ptr as *const NativisFrameHeader)).magic,
-                        )
+                        std::ptr::read_volatile(&(*(handle.ptr as *const NativisFrameHeader)).magic)
                     };
                     if magic == nativis_protocol::NATIVIS_MAGIC {
                         if let Some(hdr) = unsafe { read_header_snapshot(handle.ptr) } {
@@ -311,8 +309,7 @@ impl NativisConsumer {
                                 *guard = None;
                                 bypass_throttle = true;
                             } else {
-                                let prev_id =
-                                    self.last_observed_frame_id.load(Ordering::Relaxed);
+                                let prev_id = self.last_observed_frame_id.load(Ordering::Relaxed);
                                 if hdr.frame_id != 0 && hdr.frame_id != prev_id {
                                     self.last_observed_frame_id
                                         .store(hdr.frame_id, Ordering::Relaxed);
@@ -488,8 +485,7 @@ pub extern "C" fn nativis_get_pixels(ctx: *mut c_void) -> *mut u8 {
                                     if att.format == nativis_protocol::NATIVIS_FORMAT_NV12 {
                                         is_nv12 = true;
                                         if att.surface_index == 0 {
-                                            nv12_y_range =
-                                                attachment_plane_range(att, handle.size);
+                                            nv12_y_range = attachment_plane_range(att, handle.size);
                                             nv12_y_stride = att.stride as usize;
                                             frame_w = att.width as usize;
                                             frame_h = att.height as usize;
@@ -558,7 +554,9 @@ pub extern "C" fn nativis_get_pixels(ctx: *mut c_void) -> *mut u8 {
     let h = runtime.height.load(Ordering::Relaxed).max(1);
     let expected_size = w * h * 4;
     with_fallback_buffer(runtime, expected_size, |dst| {
-        dst.fill(0);
+        for px in dst.as_chunks_mut::<4>().0 {
+            *px = [0, 0, 0, 255];
+        }
     })
 }
 
@@ -761,6 +759,38 @@ pub extern "C" fn nativis_wake(ctx: *mut c_void) {
             }
         }
     }
+}
+
+/// Clears the `stopped` flag before starting a new FrameWatcher thread on re-attach.
+#[no_mangle]
+pub extern "C" fn nativis_resume_wait(ctx: *mut c_void) {
+    if ctx.is_null() {
+        return;
+    }
+    let runtime = unsafe { &*(ctx as *const NativisConsumer) };
+    runtime.stopped.store(false, Ordering::SeqCst);
+}
+
+/// Returns the current producer epoch from the SHM header (or 0 if unavailable).
+#[no_mangle]
+pub extern "C" fn nativis_get_epoch(ctx: *mut c_void) -> u64 {
+    if ctx.is_null() {
+        return 0;
+    }
+    let runtime = unsafe { &*(ctx as *const NativisConsumer) };
+    if let Some(shm) = runtime.active_shm() {
+        if let Ok(handle) = shm.acquire() {
+            if handle.size >= std::mem::size_of::<NativisFrameHeader>() {
+                let header = unsafe { &*(handle.ptr as *const NativisFrameHeader) };
+                if header.magic == nativis_protocol::NATIVIS_MAGIC
+                    && header.version == nativis_protocol::NATIVIS_VERSION
+                {
+                    return header.epoch;
+                }
+            }
+        }
+    }
+    0
 }
 
 // ── Generic plane-based FFI ─────────────────────────────────────────
@@ -1161,7 +1191,10 @@ mod tests {
                 handle.ptr,
                 header_size,
             );
-            std::ptr::write(handle.ptr.add(header_size) as *mut NativisAttachment, att_oob);
+            std::ptr::write(
+                handle.ptr.add(header_size) as *mut NativisAttachment,
+                att_oob,
+            );
         }
 
         let shm_c_str = std::ffi::CString::new(shm_name).unwrap();
@@ -1205,7 +1238,13 @@ mod tests {
             data: vec![0x11; 8 * 8 * 4],
         }));
         sink1
-            .submit(Frame::new(h1, 8, 8, std::time::Duration::from_millis(16), true))
+            .submit(Frame::new(
+                h1,
+                8,
+                8,
+                std::time::Duration::from_millis(16),
+                true,
+            ))
             .expect("submit small");
         resources.free(h1);
 
@@ -1268,7 +1307,13 @@ mod tests {
             data: vec![0x77; 16 * 16 * 4],
         }));
         sink2
-            .submit(Frame::new(h3, 16, 16, std::time::Duration::from_millis(16), true))
+            .submit(Frame::new(
+                h3,
+                16,
+                16,
+                std::time::Duration::from_millis(16),
+                true,
+            ))
             .expect("submit restart");
         resources.free(h3);
 
@@ -1303,8 +1348,14 @@ mod tests {
             height: 16,
             data: vec![0x55; 16 * 16 * 4],
         }));
-        sink.submit(Frame::new(h1, 16, 16, std::time::Duration::from_millis(16), true))
-            .expect("initial frame");
+        sink.submit(Frame::new(
+            h1,
+            16,
+            16,
+            std::time::Duration::from_millis(16),
+            true,
+        ))
+        .expect("initial frame");
         resources.free(h1);
 
         let shm_c_str = std::ffi::CString::new(shm_name).unwrap();
@@ -1319,8 +1370,14 @@ mod tests {
                 height: 16,
                 data: vec![(i & 0xFF) as u8; 16 * 16 * 4],
             }));
-            sink.submit(Frame::new(h, 16, 16, std::time::Duration::from_millis(16), true))
-                .expect("submit");
+            sink.submit(Frame::new(
+                h,
+                16,
+                16,
+                std::time::Duration::from_millis(16),
+                true,
+            ))
+            .expect("submit");
             resources.free(h);
 
             assert!(nativis_begin_frame(ctx, 16, 16));
@@ -1360,8 +1417,14 @@ mod tests {
             height: 8,
             data: vec![0x22; 8 * 8 * 4],
         }));
-        sink.submit(Frame::new(h1, 8, 8, std::time::Duration::from_millis(16), true))
-            .expect("submit small");
+        sink.submit(Frame::new(
+            h1,
+            8,
+            8,
+            std::time::Duration::from_millis(16),
+            true,
+        ))
+        .expect("submit small");
         resources.free(h1);
 
         let shm_c_str = std::ffi::CString::new(shm_name).unwrap();
@@ -1420,6 +1483,45 @@ mod tests {
         assert!(nativis_begin_frame(ctx, 128, 128));
         assert_eq!(nativis_get_width(ctx), 128);
         nativis_end_frame(ctx);
+
+        nativis_destroy(ctx);
+    }
+
+    #[test]
+    fn test_opaque_fallback_and_resume_wait() {
+        let shm_name = format!("/nativis_test_opaque_v2_{}", std::process::id());
+        let shm_c_str = std::ffi::CString::new(shm_name).unwrap();
+        let ctx = nativis_create_with_shm(shm_c_str.as_ptr());
+        assert!(!ctx.is_null());
+
+        assert!(nativis_begin_frame(ctx, 4, 4));
+        let px = nativis_get_pixels(ctx);
+        assert!(!px.is_null());
+        let slice = unsafe { std::slice::from_raw_parts(px, 4 * 4 * 4) };
+        for chunk in slice.as_chunks::<4>().0 {
+            assert_eq!(
+                chunk,
+                &[0, 0, 0, 255],
+                "fallback pixel must be opaque black"
+            );
+        }
+        nativis_end_frame(ctx);
+
+        nativis_wake(ctx);
+        let t0 = std::time::Instant::now();
+        assert_eq!(nativis_wait_frame(ctx, 0, 60), 0);
+        assert!(
+            t0.elapsed() < std::time::Duration::from_millis(20),
+            "stopped wait must return immediately"
+        );
+
+        nativis_resume_wait(ctx);
+        let t1 = std::time::Instant::now();
+        assert_eq!(nativis_wait_frame(ctx, 0, 50), 0);
+        assert!(
+            t1.elapsed() >= std::time::Duration::from_millis(40),
+            "after nativis_resume_wait, nativis_wait_frame must sleep instead of busy-spinning"
+        );
 
         nativis_destroy(ctx);
     }

@@ -4,7 +4,12 @@ import "."
 
 Item {
     id: root
-    
+
+    Rectangle {
+        anchors.fill: parent
+        color: "black"
+    }
+
     NativisItem {
         id: nativis
         anchors.fill: parent
