@@ -20,8 +20,10 @@ extern "C" {
     void     nativis_render(void* ctx);
     void     nativis_end_frame(void* ctx);
     uint64_t nativis_get_frame_id(void* ctx);
+    uint64_t nativis_get_epoch(void* ctx);
     uint64_t nativis_wait_frame(void* ctx, uint64_t last_seen_id, uint32_t timeout_ms);
     void     nativis_wake(void* ctx);
+    void     nativis_resume_wait(void* ctx);
 
     // Multi-plane FFI for NV12
     uint32_t nativis_get_format(void* ctx);
@@ -36,6 +38,7 @@ extern "C" {
 #define NATIVIS_FORMAT_P010      3
 
 class QSGTexture;
+class QQuickWindow;
 
 class NativisItem : public QQuickItem
 {
@@ -47,10 +50,14 @@ public:
 protected:
     QSGNode *updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) override;
     void itemChange(ItemChange change, const ItemChangeData &value) override;
+    void releaseResources() override;
 
 private:
+    void scheduleOrDeleteTextures(QQuickWindow *win);
+
     void* m_runtimeCtx = nullptr;
     QThread* m_watcherThread = nullptr;
+    QQuickWindow* m_attachedWindow = nullptr;
     std::atomic<bool> m_watcherRunning{false};
 
     // Persistent NV12 GPU Textures
@@ -68,8 +75,11 @@ private:
     int         m_rgbaW = 0;
     int         m_rgbaH = 0;
 
-    // Frame-id gating (skip redundant uploads)
+    // Frame-id / epoch / geometry gating
     uint64_t    m_lastUploadedFrameId = UINT64_MAX;
+    uint64_t    m_lastUploadedEpoch = 0;
+    qreal       m_lastRectW = 0;
+    qreal       m_lastRectH = 0;
 };
 
 #endif // NATIVISITEM_H

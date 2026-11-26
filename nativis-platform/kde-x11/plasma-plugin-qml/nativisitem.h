@@ -19,8 +19,10 @@ extern "C" {
     void     nativis_render(void* ctx);
     void     nativis_end_frame(void* ctx);
     uint64_t nativis_get_frame_id(void* ctx);  // Phase 1: frame change detection
+    uint64_t nativis_get_epoch(void* ctx);
     uint64_t nativis_wait_frame(void* ctx, uint64_t last_seen_id, uint32_t timeout_ms); // Item 5: futex wait
     void     nativis_wake(void* ctx);
+    void     nativis_resume_wait(void* ctx);
 
     // Fase 5: Generic plane-based FFI
     uint32_t nativis_get_format(void* ctx);
@@ -40,7 +42,7 @@ extern "C" {
 //
 // Runs on a dedicated thread. Blocks on nativis_wait_frame() (Linux futex on
 // lower 32-bits of frame_id at SHM offset 8) and emits newFrameAvailable()
-// only when the id changes. Replaces 240 Hz busy polling with 0 wakeups/s when idle.
+// only when the id or epoch changes.
 // ---------------------------------------------------------------------------
 class FrameWatcher : public QThread
 {
@@ -50,7 +52,7 @@ public:
         : QThread(parent), m_ctx(runtimeCtx), m_running(true) {}
 
     void stop() {
-        m_running.store(false, std::memory_order_relaxed);
+        m_running.store(false, std::memory_order_seq_cst);
         if (m_ctx) {
             nativis_wake(m_ctx);
         }
@@ -62,12 +64,18 @@ signals:
 protected:
     void run() override {
         quint64 lastSeen = 0;
+        quint64 lastEpoch = 0;
         int debugEmitCount = 0; // TEMP: cap logging so video framerate doesn't flood journalctl
 
-        while (m_running.load(std::memory_order_relaxed)) {
+        while (m_running.load(std::memory_order_seq_cst)) {
             quint64 current = nativis_wait_frame(m_ctx, lastSeen, 1000);
-            if (current != lastSeen && current != 0) {
+            quint64 epoch = nativis_get_epoch(m_ctx);
+            if (!m_running.load(std::memory_order_seq_cst)) {
+                break;
+            }
+            if (current != 0 && (current != lastSeen || (epoch != 0 && epoch != lastEpoch))) {
                 lastSeen = current;
+                if (epoch != 0) lastEpoch = epoch;
                 if (debugEmitCount < 20) {
                     qDebug() << "[nativis-debug] FrameWatcher emit newFrameAvailable, frameId=" << current
                               << "t=" << QDateTime::currentMSecsSinceEpoch();
@@ -87,6 +95,7 @@ private:
 // NativisItem
 // ---------------------------------------------------------------------------
 class QSGTexture;
+class QQuickWindow;
 
 class NativisItem : public QQuickItem
 {
@@ -98,12 +107,16 @@ public:
 protected:
     QSGNode *updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) override;
     void itemChange(ItemChange change, const ItemChangeData &value) override;
+    void releaseResources() override;
 
 private:
+    void scheduleOrDeleteTextures(QQuickWindow *win);
+
     void* m_runtimeCtx = nullptr;
 
     // Phase 1 — event-driven rendering
-    FrameWatcher* m_watcher   = nullptr;
+    FrameWatcher* m_watcher        = nullptr;
+    QQuickWindow* m_attachedWindow = nullptr;
 
     // Phase 2 — persistent texture (RGBA fallback path)
     QSGTexture*   m_texture   = nullptr;
@@ -117,12 +130,11 @@ private:
     int           m_nv12H     = 0;  // tracked Y-plane height for realloc detection
     bool          m_nv12Active = false; // true when NV12 pipeline is in use
 
-    // Fase 7 — frame-id gating
-    // Initialized to UINT64_MAX so the very first frame from the backend
-    // (frame_id = 0) is never equal and always triggers an upload.
-    // If initialized to 0, the gating check "currentFrameId == 0 == lastUploaded"
-    // would permanently skip the first frame, keeping the wallpaper black.
+    // Fase 7 — frame-id / epoch / geometry gating
     uint64_t      m_lastUploadedFrameId = UINT64_MAX;
+    uint64_t      m_lastUploadedEpoch   = 0;
+    qreal         m_lastRectW           = 0;
+    qreal         m_lastRectH           = 0;
 
 };
 
